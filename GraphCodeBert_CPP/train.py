@@ -16,11 +16,13 @@ from transformers import (
     RobertaConfig,
     RobertaForMaskedLM,
     RobertaTokenizer,
-    AdamW,
     get_linear_schedule_with_warmup
 )
+from torch.optim import AdamW  # Changed: Import from torch.optim instead
 from tqdm import tqdm
-
+print(torch.cuda.is_available())
+print(torch.cuda.device_count())
+print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")
 
 # Set random seeds for reproducibility
 def set_seed(seed=42):

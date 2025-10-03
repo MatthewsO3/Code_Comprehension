@@ -1,6 +1,6 @@
 """
 Data Flow Graph (DFG) Extraction for C++ Code
-Streams the github-code-clean dataset and extracts DFG using tree-sitter
+Streams the-stack dataset and extracts DFG using tree-sitter
 """
 
 import json
@@ -12,12 +12,13 @@ from tree_sitter import Language, Parser
 from datasets import load_dataset
 from transformers import RobertaTokenizer
 from tqdm import tqdm
-#
-from tree_sitter_cpp import language
 
-CPP_LANGUAGE = Language(language)
-parser = Parser()
-parser.set_language(CPP_LANGUAGE)
+# For tree-sitter 0.25.x
+import tree_sitter_cpp as tscpp
+
+# Initialize parser with C++ language
+CPP_LANGUAGE = Language(tscpp.language())
+ts_parser = Parser(CPP_LANGUAGE)  # Renamed to avoid conflict
 print("Tree-sitter works!")
 
 # Load tokenizer
@@ -101,7 +102,7 @@ def preprocess_code(code: str) -> Dict:
     try:
         # Parse code
         code_bytes = code.encode('utf8')
-        tree = parser.parse(code_bytes)
+        tree = ts_parser.parse(code_bytes)  # Use ts_parser instead of parser
 
         # Tokenize
         tokens = tokenizer.tokenize(code)
@@ -153,15 +154,8 @@ def preprocess_code(code: str) -> Dict:
         return None
 
 
-def should_keep_file(example):
-    """Filter criteria for C++ files"""
-    code = example['code']
-    path = example['path']
-
-    # Check if it's C++
-    if not any(path.endswith(ext) for ext in ['.cpp', '.cc', '.cxx', '.h', '.hpp', '.c++']):
-        return False
-
+def should_keep_code(code: str) -> bool:
+    """Filter criteria for C++ code"""
     # Length checks
     if len(code) < 100 or len(code) > 50000:
         return False
@@ -173,7 +167,7 @@ def should_keep_file(example):
     return True
 
 
-def stream_and_process_dataset(output_dir: str, max_samples: int = 10):
+def stream_and_process_dataset(output_dir: str, max_samples: int = 1000):
     """
     Stream dataset, extract DFG, and save processed samples
     """
@@ -181,24 +175,41 @@ def stream_and_process_dataset(output_dir: str, max_samples: int = 10):
     output_path.mkdir(parents=True, exist_ok=True)
 
     print("Loading dataset in streaming mode...")
+    print("This may take a moment to start streaming...")
+
+    # Use codeparrot/github-code-clean dataset for C++
     dataset = load_dataset(
         "codeparrot/github-code-clean",
+        "C++-all",
         split="train",
-        streaming=True
+        streaming=True,
+        trust_remote_code=True
     )
 
     processed_samples = []
     skipped = 0
+    checked = 0  # Track how many examples we've looked at
 
     print("Processing C++ files...")
-    with tqdm(total=max_samples) as pbar:
+
+    with tqdm(total=max_samples, desc="Processing") as pbar:
         for example in dataset:
-            # Filter for C++ files
-            if not should_keep_file(example):
+            checked += 1
+
+            # Get code content using the correct field name
+            code = example.get('code', '')
+
+            if not code:
+                skipped += 1
+                continue
+
+            # Filter code
+            if not should_keep_code(code):
+                skipped += 1
                 continue
 
             # Process code and extract DFG
-            processed = preprocess_code(example['code'])
+            processed = preprocess_code(code)
 
             if processed is not None:
                 processed_samples.append(processed)
@@ -210,12 +221,16 @@ def stream_and_process_dataset(output_dir: str, max_samples: int = 10):
                     chunk_path = output_path / f"processed_chunk_{chunk_num}.pkl"
                     with open(chunk_path, 'wb') as f:
                         pickle.dump(processed_samples[-1000:], f)
-                    print(f"\nSaved chunk {chunk_num} ({len(processed_samples)} total samples)")
+                    print(f"\nSaved chunk {chunk_num} ({len(processed_samples)} total samples, checked {checked} examples)")
 
                 if len(processed_samples) >= max_samples:
                     break
             else:
                 skipped += 1
+
+            # Progress update every 10000 examples checked
+            if checked % 10000 == 0:
+                print(f"\nProgress: Checked {checked} examples, found {len(processed_samples)} valid samples")
 
     # Save final chunk
     remaining = len(processed_samples) % 1000
@@ -229,7 +244,9 @@ def stream_and_process_dataset(output_dir: str, max_samples: int = 10):
     metadata = {
         'total_samples': len(processed_samples),
         'skipped': skipped,
-        'max_samples': max_samples
+        'checked': checked,
+        'max_samples': max_samples,
+        'dataset': 'codeparrot/github-code-clean (C++)'
     }
 
     with open(output_path / 'metadata.json', 'w') as f:
@@ -237,6 +254,7 @@ def stream_and_process_dataset(output_dir: str, max_samples: int = 10):
 
     print(f"\n{'=' * 50}")
     print(f"Processing complete!")
+    print(f"Total examples checked: {checked}")
     print(f"Total samples processed: {len(processed_samples)}")
     print(f"Samples skipped: {skipped}")
     print(f"Data saved to: {output_path}")
@@ -251,15 +269,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Extract DFG from C++ code')
     parser.add_argument('--output_dir', type=str, default='./processed_data',
                         help='Output directory for processed data')
-    parser.add_argument('--max_samples', type=int, default=100000,
+    parser.add_argument('--max_samples', type=int, default=1000,
                         help='Maximum number of samples to process')
 
     args = parser.parse_args()
-
-    # Check if tree-sitter language is built
-    if not Path('build/my-languages.so').exists():
-        print("Error: Tree-sitter C++ language not built!")
-        print("Please run setup script first: bash 1_setup_environment.sh")
-        exit(1)
 
     stream_and_process_dataset(args.output_dir, args.max_samples)
