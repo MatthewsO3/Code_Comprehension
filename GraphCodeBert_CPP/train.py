@@ -200,17 +200,17 @@ def main():
                         help='Directory with processed data')
     parser.add_argument('--output_dir', type=str, default='./graphcodebert-cpp-mlm',
                         help='Output directory for model checkpoints')
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size for training')
-    parser.add_argument('--epochs', type=int, default=3,
+    parser.add_argument('--epochs', type=int, default=1,
                         help='Number of training epochs')
     parser.add_argument('--learning_rate', type=float, default=5e-5,
                         help='Learning rate')
-    parser.add_argument('--max_length', type=int, default=512,
+    parser.add_argument('--max_length', type=int, default=128,
                         help='Maximum sequence length')
-    parser.add_argument('--warmup_steps', type=int, default=1000,
+    parser.add_argument('--warmup_steps', type=int, default=10,
                         help='Warmup steps for scheduler')
-    parser.add_argument('--save_steps', type=int, default=5000,
+    parser.add_argument('--save_steps', type=int, default=500,
                         help='Save checkpoint every N steps')
     parser.add_argument('--mlm_probability', type=float, default=0.15,
                         help='Probability of masking tokens')
@@ -218,7 +218,13 @@ def main():
     args = parser.parse_args()
 
     # Setup
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    #device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.backends.mps.is_available():
+        device = torch.device('mps')
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
     print(f"Using device: {device}")
 
     # Create output directory
