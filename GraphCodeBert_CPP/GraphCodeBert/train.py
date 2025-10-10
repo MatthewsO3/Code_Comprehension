@@ -196,9 +196,9 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='Train GraphCodeBERT on MLM')
-    parser.add_argument('--data_dir', type=str, default='./processed_data',
+    parser.add_argument('--data_dir', type=str, default='.GraphCodeBert/processed_data',
                         help='Directory with processed data')
-    parser.add_argument('--output_dir', type=str, default='./graphcodebert-cpp-mlm',
+    parser.add_argument('--output_dir', type=str, default='.GraphCodeBert/graphcodebert-cpp-mlm',
                         help='Output directory for model checkpoints')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size for training')

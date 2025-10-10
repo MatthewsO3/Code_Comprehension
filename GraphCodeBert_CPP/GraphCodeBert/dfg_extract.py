@@ -267,7 +267,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description='Extract DFG from C++ code')
-    parser.add_argument('--output_dir', type=str, default='./processed_data',
+    parser.add_argument('--output_dir', type=str, default='.GraphCodeBert/processed_data',
                         help='Output directory for processed data')
     parser.add_argument('--max_samples', type=int, default=1000,
                         help='Maximum number of samples to process')
