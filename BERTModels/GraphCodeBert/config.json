@@ -1,0 +1,22 @@
+
+{
+  "train": {
+    "data_file": "data/cpp_functions.jsonl",
+    "output_dir": "graphcodebert-cpp-mlm-from-config",
+    "batch_size": 1,
+    "epochs": 1,
+    "learning_rate": 5e-5,
+    "max_length": 256,
+    "warmup_steps": 10,
+    "mlm_probability": 0.15,
+    "validation_split": 0.05
+  },
+  "evaluate": {
+    "model_path": "graphcodebert-cpp-mlm-from-config/best_model",
+    "mask_ratio": 0.2,
+    "top_k": 5,
+    "use_database_snippets": true,
+    "training_data_size": 1000,
+    "num_database_snippets": 10
+  }
+}
