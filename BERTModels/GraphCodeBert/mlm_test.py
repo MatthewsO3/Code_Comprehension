@@ -164,7 +164,7 @@ class MLMEvaluator:
         Evaluates a single snippet and returns raw numbers for aggregation.
         Still prints the detailed predictions for inspection.
         """
-        print("\n" + "="*80 + "\nORIGINAL CODE:\n" + "-"*80 + f"\n{code.strip()}")
+        #print("\n" + "="*80 + "\nORIGINAL CODE:\n" + "-"*80 + f"\n{code.strip()}")
         # Use add_prefix_space=True for consistency with training data
         code_tokens = self.tokenizer.tokenize(code, add_prefix_space=True)
         if not code_tokens: return None
@@ -174,7 +174,7 @@ class MLMEvaluator:
         orig_tokens = [code_tokens[i] for i in mask_pos]
         masked_tokens = code_tokens.copy()
         for pos in mask_pos: masked_tokens[pos] = self.tokenizer.mask_token
-        print("\n" + "="*80 + "\nMASKED CODE:\n" + "-"*80 + f"\n{self.tokenizer.convert_tokens_to_string(masked_tokens)}")
+        #print("\n" + "="*80 + "\nMASKED CODE:\n" + "-"*80 + f"\n{self.tokenizer.convert_tokens_to_string(masked_tokens)}")
 
         inputs = self.preprocess_for_graphcodebert(code, masked_tokens)
         with torch.no_grad():

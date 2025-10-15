@@ -1,0 +1,30 @@
+#                             OVERALL STATISTICS                             #
+################################################################################
+  Snippets evaluated: 1000
+  Total masked tokens: 14503
+--------------------------------------------------------------------------------
+  Overall Top-1 Accuracy: 74.58% (10817/14503)
+  Overall Top-5 Accuracy: 86.11% (12488/14503)
+  Overall Perplexity:     26.7652
+################################################################################
+{
+  "train": {
+    "data_file": "data/cpp_functions.jsonl",
+    "output_dir": "graphcodebert-cpp-mlm-from-config",
+    "batch_size": 1,
+    "epochs": 1,
+    "learning_rate": 5e-5,
+    "max_length": 128,
+    "warmup_steps": 10,
+    "mlm_probability": 0.15,
+    "validation_split": 0.15
+  },
+  "evaluate": {
+    "model_path": "graphcodebert-cpp-mlm-from-config/best_model",
+    "mask_ratio": 0.2,
+    "top_k": 5,
+    "use_database_snippets": true,
+    "training_data_size": 10000,
+    "num_database_snippets": 1000
+  }
+}
