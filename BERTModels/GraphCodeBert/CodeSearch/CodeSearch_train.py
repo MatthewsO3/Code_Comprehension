@@ -160,7 +160,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, device):
 
 
 def main():
-    config = json.load(open('config.json')).get('codesearch')
+    config = json.load(open('E:\SZAKDOGA\GraphCodeBert_CPP\BERTModels\GraphCodeBert\config.json')).get('codesearch')
 
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Using device: {device}")
