@@ -37,3 +37,168 @@ Training: 100%|██████████| 213/213 [03:00<00:00,  1.18it/s, 
 Validation: 100%|██████████| 38/38 [00:40<00:00,  1.07s/it]
 Train Loss: 4.2716 | Validation Loss: 4.2270
 New best model found! Saving to unixcoder-cpp-mlm/best_model
+
+--- Running evaluation with configuration ---
+  model_path: unixcoder-cpp-mlm/best_model
+  mask_ratio: 0.2
+  top_k: 5
+  use_database_snippets: True
+  training_data_size: 1000
+  num_database_snippets: 10
+-------------------------------------------
+
+Loading tokenizer from unixcoder-cpp-mlm/best_model...
+Fetching 10 test snippets from 'codeparrot/github-code-clean', skipping the first 1000...
+Applying filter: Snippets must have FEWER THAN 100 tokens.
+Successfully fetched 10 snippets for evaluation.
+Using device: cpu
+Loading model from unixcoder-cpp-mlm/best_model...
+Some weights of the model checkpoint at unixcoder-cpp-mlm/best_model were not used when initializing RobertaForMaskedLM: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+- This IS expected if you are initializing RobertaForMaskedLM from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing RobertaForMaskedLM from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Model loaded successfully!
+
+
+################################### SNIPPET 1/10 ###################################
+
+================================================================================
+SNIPPET DETAILS:
+
+Original Code:
+template <typename Item>
+void mergesort(Item a[], int l, int r)
+{
+    if (r <= 1) return ;
+    int m = (r+1)/2;
+    mergesort(a, l, m);
+    mergesort(a, m+1, r);
+    merge(a, l, m, r);
+}
+
+
+Masked Code:
+ template <typename<mask><mask>
+void mergesort(Item<mask>[],<mask><mask>, int<mask>)
+{
+    if (r <=<mask><mask><mask> ;<mask>    int m<mask> (r+1)/2;
+    mergesort(a, l, m);<mask>    mergesort(a, m+1, r);
+   <mask>(a<mask> l, m, r);<mask>}<mask>
+
+--------------------------------------------------------------------------------
+PREDICTIONS:
+
+Position 3 (original: 'ĠItem'):
+    1.   'ris' (prob: 0.0107)
+    2.   'istate' (prob: 0.0100)
+    3.   'istics' (prob: 0.0099)
+    4.   'CIA' (prob: 0.0084)
+    5.   'istream' (prob: 0.0059)
+
+Position 4 (original: '>'):
+    1.   'istream' (prob: 0.0099)
+    2.   'clsid' (prob: 0.0064)
+    3.   'istate' (prob: 0.0064)
+    4.   'ris' (prob: 0.0058)
+    5.   'chans' (prob: 0.0045)
+
+Position 11 (original: 'Ġa'):
+    1.   'istate' (prob: 0.0134)
+    2.   'possible' (prob: 0.0087)
+    3.   '......' (prob: 0.0044)
+    4.   'ISM' (prob: 0.0043)
+    5.   'Cm' (prob: 0.0032)
+
+Position 13 (original: 'Ġint'):
+    1.   'istics' (prob: 0.0065)
+    2.   'fancy' (prob: 0.0045)
+    3.   'MathJax' (prob: 0.0044)
+    4.   'iclass' (prob: 0.0041)
+    5.   'SIS' (prob: 0.0035)
+
+Position 14 (original: 'Ġl'):
+    1.   'ola' (prob: 0.0046)
+    2.   'acter' (prob: 0.0040)
+    3.   'istate' (prob: 0.0039)
+    4.   'Ġextendable' (prob: 0.0039)
+    5.   'redient' (prob: 0.0028)
+
+Position 17 (original: 'Ġr'):
+    1.   'ola' (prob: 0.0065)
+    2.   'istics' (prob: 0.0043)
+    3.   'TestClass' (prob: 0.0036)
+    4.   'breaks' (prob: 0.0035)
+    5.   'TestRunner' (prob: 0.0030)
+
+Position 27 (original: 'Ġ1'):
+    1.   'iclass' (prob: 0.0059)
+    2.   'EA' (prob: 0.0043)
+    3.   'istics' (prob: 0.0043)
+    4.   'Ġextendable' (prob: 0.0042)
+    5.   'TestClass' (prob: 0.0036)
+
+Position 28 (original: ')'):
+    1.   'ham' (prob: 0.0083)
+    2.   'breaks' (prob: 0.0055)
+    3.   'hell' (prob: 0.0048)
+    4.   'Ah' (prob: 0.0039)
+    5.   'izr' (prob: 0.0035)
+
+Position 29 (original: 'Ġreturn'):
+    1.   'istream' (prob: 0.0074)
+    2.   'icial' (prob: 0.0072)
+    3.   'ISM' (prob: 0.0066)
+    4.   'edu' (prob: 0.0049)
+    5.   'isms' (prob: 0.0041)
+
+Position 31 (original: 'Ċ'):
+    1.   'icial' (prob: 0.0121)
+    2.   'ulp' (prob: 0.0042)
+    3.   'arbage' (prob: 0.0038)
+    4.   'Ġecs' (prob: 0.0027)
+    5.   'Um' (prob: 0.0025)
+
+Position 35 (original: 'Ġ='):
+    1.   'edu' (prob: 0.0058)
+    2.   'iu' (prob: 0.0042)
+    3.   'ola' (prob: 0.0037)
+    4.   'ino' (prob: 0.0031)
+    5.   'ity' (prob: 0.0029)
+
+Position 54 (original: 'Ċ'):
+    1.   'icial' (prob: 0.0139)
+    2.   'ĠRNA' (prob: 0.0041)
+    3.   'FolderName' (prob: 0.0038)
+    4.   'Ġimplemented' (prob: 0.0029)
+    5.   'lashes' (prob: 0.0028)
+
+Position 69 (original: 'Ġmerge'):
+    1.   'Reach' (prob: 0.0130)
+    2.   'istate' (prob: 0.0046)
+    3.   'Ancestor' (prob: 0.0038)
+    4.   'ĠProblem' (prob: 0.0036)
+    5.   'yst' (prob: 0.0034)
+
+Position 72 (original: ','):
+    1.   'classifier' (prob: 0.0185)
+    2.   'Classifier' (prob: 0.0145)
+    3.   'ĠTrain' (prob: 0.0077)
+    4.   'Classification' (prob: 0.0057)
+    5.   'cC' (prob: 0.0053)
+
+Position 79 (original: 'Ċ'):
+    1.   'icial' (prob: 0.0074)
+    2.   'dR' (prob: 0.0049)
+    3.   'ĠMPC' (prob: 0.0040)
+    4.   'ran' (prob: 0.0038)
+    5.   'ĠXMM' (prob: 0.0031)
+
+Position 81 (original: 'Ċ'):
+    1.   'rms' (prob: 0.0043)
+    2.   'aneous' (prob: 0.0042)
+    3.   'CAB' (prob: 0.0038)
+    4.   '.]' (prob: 0.0026)
+    5.   'ORB' (prob: 0.0025)
+
+
+################################### SNIPPET 2/10 ###################################
+
