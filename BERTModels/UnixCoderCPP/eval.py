@@ -73,6 +73,7 @@ class UniXcoderMLMEvaluator:
 
         self.tokenizer = tokenizer
         self.model = RobertaForMaskedLM.from_pretrained(model_path).to(self.device).eval()
+        print("\n--- LM Head Architecture ---\n", self.model.lm_head)
         print("Model loaded successfully!")
 
     def evaluate_snippet(self, code: str, mask_ratio: float, top_k: int) -> Dict:
@@ -99,10 +100,10 @@ class UniXcoderMLMEvaluator:
         # --- MODIFICATION START: Print Original and Masked Code ---
         masked_code_display = self.tokenizer.convert_tokens_to_string(masked_tokens)
 
-        print("\n" + "="*80 + "\nSNIPPET DETAILS:")
-        print(f"\nOriginal Code:\n{code}")
-        print(f"\nMasked Code:\n{masked_code_display}")
-        print("\n" + "-"*80)
+       # print("\n" + "="*80 + "\nSNIPPET DETAILS:")
+       # print(f"\nOriginal Code:\n{code}")
+       # print(f"\nMasked Code:\n{masked_code_display}")
+       # print("\n" + "-"*80)
         # --- MODIFICATION END ---
 
         # Prepare input: [CLS] tokens [SEP]
@@ -137,7 +138,7 @@ class UniXcoderMLMEvaluator:
             top_probs, top_indices = torch.topk(probs, top_k)
 
             original_token = original_tokens[i]
-            print(f"\nPosition {pos} (original: '{original_token}'):")
+            #print(f"\nPosition {pos} (original: '{original_token}'):")
 
             top_predictions = self.tokenizer.convert_ids_to_tokens(top_indices)
 
@@ -154,7 +155,7 @@ class UniXcoderMLMEvaluator:
                         found_top5 = True
                     if rank == 1:
                         top1_correct += 1
-                print(f"    {rank}. {marker} '{pred}' (prob: {prob:.4f})")
+               # print(f"    {rank}. {marker} '{pred}' (prob: {prob:.4f})")
 
             log_probs.append(np.log(correct_token_prob))
 

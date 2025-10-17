@@ -252,9 +252,7 @@ def main():
     print("✓ Loaded UniXcoder base-nine with new MLM head")
 
     model = model.to(device)
-    for param in model.roberta.parameters():
-        param.requires_grad = False
-    print("Base UniXcoder model (roberta) parameters frozen.")
+
     # Load dataset
     full_dataset = UniXcoderDataset(args.data_file, tokenizer, args.max_length)
     val_size = int(args.validation_split * len(full_dataset))

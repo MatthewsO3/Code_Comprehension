@@ -86,7 +86,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Prepare dataset for UniXcoder')
     parser.add_argument('--output_file', type=str, default='data/unixcoder_cpp.jsonl',
                         help='Output JSONL file for processed data')
-    parser.add_argument('--max_samples', type=int, default=1000,
+    parser.add_argument('--max_samples', type=int, default=10000,
                         help='Maximum number of samples to process')
     args = parser.parse_args()
     stream_and_process_dataset(args.output_file, args.max_samples)

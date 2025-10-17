@@ -2,11 +2,11 @@
   "train": {
     "data_file": "data/unixcoder_cpp.jsonl",
     "output_dir": "unixcoder-cpp-mlm",
-    "batch_size": 4,
-    "epochs": 4,
+    "batch_size": 2,
+    "epochs": 2,
     "learning_rate": 5e-5,
-    "max_length": 256,
-    "warmup_steps": 10,
+    "max_length": 128,
+    "warmup_steps": 20,
     "mlm_probability": 0.15,
     "validation_split": 0.15
   },
@@ -15,7 +15,7 @@
     "mask_ratio": 0.2,
     "top_k": 5,
     "use_database_snippets": true,
-    "training_data_size": 1000,
-    "num_database_snippets": 10
+    "training_data_size": 10000,
+    "num_database_snippets": 1000
   }
 }
