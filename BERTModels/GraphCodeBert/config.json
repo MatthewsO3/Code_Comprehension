@@ -20,14 +20,14 @@
     "num_database_snippets": 10
   },
   "codesearch": {
-    "processed_data_file": "data/code_docstring_dataset.jsonl",
-    "mlm_model_path": "graphcodebert-cpp-mlm-from-config/best_model",
+    "processed_data_file": "/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/data/code_docstring_dataset.jsonl",
+    "mlm_model_path": "/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
     "output_dir": "CodeSearch/graphcodebert-cpp-codesearch-model",
     "batch_size": 2,
-    "epochs": 2,
+    "epochs": 5,
     "learning_rate": 2e-5,
-    "max_code_len": 128,
-    "max_query_len": 128,
+    "max_code_len": 256,
+    "max_query_len": 256,
     "validation_split": 0.1
   }
 }

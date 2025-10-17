@@ -10,6 +10,8 @@ import json
 import argparse
 from pathlib import Path
 from typing import List, Dict
+
+from onnx.compose import add_prefix
 from transformers import RobertaTokenizer, RobertaForMaskedLM
 from datasets import load_dataset
 
@@ -43,7 +45,7 @@ def fetch_test_snippets_from_db(skip_n: int, take_n: int, tokenizer: RobertaToke
         filtered_dataset = (
             ex for ex in dataset.skip(skip_n)
             if should_keep_code(ex.get('code')) and
-               len(tokenizer.tokenize(ex.get('code'), add_prefix_space=True)) < 100
+               len(tokenizer.tokenize(ex.get('code'),add_prefix_space = True)) < 100
         )
 
         for example in filtered_dataset:
@@ -81,7 +83,7 @@ class UniXcoderMLMEvaluator:
         Evaluates a single snippet and returns raw numbers for aggregation.
         """
         # Tokenize with add_prefix_space=True for consistency
-        code_tokens = self.tokenizer.tokenize(code, add_prefix_space=True)
+        code_tokens = self.tokenizer.tokenize(code,add_prefix_space = True)
         if not code_tokens:
             return None
 
@@ -100,10 +102,10 @@ class UniXcoderMLMEvaluator:
         # --- MODIFICATION START: Print Original and Masked Code ---
         masked_code_display = self.tokenizer.convert_tokens_to_string(masked_tokens)
 
-        print("\n" + "="*80 + "\nSNIPPET DETAILS:")
-        print(f"\nOriginal Code:\n{code}")
-        print(f"\nMasked Code:\n{masked_code_display}")
-        print("\n" + "-"*80)
+        #print("\n" + "="*80 + "\nSNIPPET DETAILS:")
+        #print(f"\nOriginal Code:\n{code}")
+        #print(f"\nMasked Code:\n{masked_code_display}")
+       # print("\n" + "-"*80)
         # --- MODIFICATION END ---
 
         # Prepare input: [CLS] tokens [SEP]
@@ -126,7 +128,7 @@ class UniXcoderMLMEvaluator:
             logits = outputs.logits
 
         # Evaluate predictions
-        print("PREDICTIONS:") # Simplified header
+        #print("PREDICTIONS:") # Simplified header
         top1_correct, top5_correct, log_probs = 0, 0, []
 
         for i, pos in enumerate(mask_positions):
@@ -138,7 +140,7 @@ class UniXcoderMLMEvaluator:
             top_probs, top_indices = torch.topk(probs, top_k)
 
             original_token = original_tokens[i]
-            print(f"\nPosition {pos} (original: '{original_token}'):")
+            #print(f"\nPosition {pos} (original: '{original_token}'):")
 
             top_predictions = self.tokenizer.convert_ids_to_tokens(top_indices)
 
@@ -155,7 +157,7 @@ class UniXcoderMLMEvaluator:
                         found_top5 = True
                     if rank == 1:
                         top1_correct += 1
-                print(f"    {rank}. {marker} '{pred}' (prob: {prob:.4f})")
+                #print(f"    {rank}. {marker} '{pred}' (prob: {prob:.4f})")
 
             log_probs.append(np.log(correct_token_prob))
 
@@ -233,7 +235,7 @@ def main():
     }
 
     for i, snippet in enumerate(snippets_to_evaluate, 1):
-        print(f"\n\n{'#' * 35} SNIPPET {i}/{len(snippets_to_evaluate)} {'#' * 35}")
+       # print(f"\n\n{'#' * 35} SNIPPET {i}/{len(snippets_to_evaluate)} {'#' * 35}")
         results = evaluator.evaluate_snippet(snippet, args.mask_ratio, args.top_k)
         if results:
             aggregated_results['total_top1_correct'] += results['top1_correct']

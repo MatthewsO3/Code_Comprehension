@@ -242,14 +242,8 @@ def main():
 
     # UniXcoder base-nine doesn't have MLM head released, so we add it
     # We load the base model and add MLM head
-    from transformers import RobertaConfig, RobertaModel
-    config_unixcoder = RobertaConfig.from_pretrained("microsoft/unixcoder-base-nine")
-    model = RobertaForMaskedLM(config_unixcoder)
-
-    # Load pretrained weights for the base model (without MLM head)
-    base_model = RobertaModel.from_pretrained("microsoft/unixcoder-base-nine")
-    model.roberta = base_model
-    print("✓ Loaded UniXcoder base-nine with new MLM head")
+    model = RobertaForMaskedLM.from_pretrained("microsoft/unixcoder-base-nine")
+    print("✓ Loaded UniXcoder base-nine with MLM head")
 
     model = model.to(device)
 

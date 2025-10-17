@@ -3,7 +3,7 @@
     "data_file": "data/unixcoder_cpp.jsonl",
     "output_dir": "unixcoder-cpp-mlm",
     "batch_size": 2,
-    "epochs": 2,
+    "epochs": 1,
     "learning_rate": 5e-5,
     "max_length": 128,
     "warmup_steps": 20,

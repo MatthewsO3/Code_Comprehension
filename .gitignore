@@ -26,6 +26,7 @@ unixcoder_cpp_mlm/
 best_model/
 .idea/
 *.egg-info/
+graphcodebert-cpp-codesearch-model/
 .installed.cfg
 *.egg
 MANIFEST
