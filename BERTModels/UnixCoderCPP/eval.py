@@ -73,7 +73,6 @@ class UniXcoderMLMEvaluator:
 
         self.tokenizer = tokenizer
         self.model = RobertaForMaskedLM.from_pretrained(model_path).to(self.device).eval()
-        print("\n--- LM Head Architecture ---\n", self.model.lm_head)
         print("Model loaded successfully!")
 
     def evaluate_snippet(self, code: str, mask_ratio: float, top_k: int) -> Dict:

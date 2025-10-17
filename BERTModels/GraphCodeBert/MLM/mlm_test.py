@@ -231,7 +231,7 @@ def main():
 
     config_from_file = {}
     if os.path.exists('config.json'):
-        with open('config.json', 'r') as f:
+        with open('../config.json', 'r') as f:
             config_from_file = json.load(f).get("evaluate", {})
     parser.set_defaults(**config_from_file)
     args = parser.parse_args()

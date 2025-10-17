@@ -297,7 +297,7 @@ def main():
 
     config = {}
     if os.path.exists('config.json'):
-        with open('config.json', 'r') as f:
+        with open('../config.json', 'r') as f:
             config = json.load(f).get("train", {})
     parser.set_defaults(**config)
     args = parser.parse_args()
