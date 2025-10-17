@@ -17,6 +17,6 @@
     "top_k": 5,
     "use_database_snippets": true,
     "training_data_size": 10000,
-    "num_database_snippets": 1000
+    "num_database_snippets": 10
   }
 }

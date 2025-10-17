@@ -1,0 +1,39 @@
+Loading samples: 1000it [00:00, 24679.64it/s]
+Loaded 1000 samples.
+
+--- Training Configuration ---
+  data_file: data/unixcoder_cpp.jsonl
+  output_dir: unixcoder-cpp-mlm
+  batch_size: 4
+  epochs: 4
+  learning_rate: 5e-05
+  max_length: 256
+  warmup_steps: 10
+  mlm_probability: 0.15
+  validation_split: 0.15
+------------------------------
+
+
+==================== Epoch 1/4 ====================
+Training: 100%|██████████| 213/213 [02:33<00:00,  1.39it/s, loss=6.26]
+Validation: 100%|██████████| 38/38 [00:42<00:00,  1.12s/it]
+Train Loss: 7.9326 | Validation Loss: 5.7723
+New best model found! Saving to unixcoder-cpp-mlm/best_model
+Training:   0%|          | 0/213 [00:00<?, ?it/s]
+==================== Epoch 2/4 ====================
+Training: 100%|██████████| 213/213 [02:55<00:00,  1.22it/s, loss=5.66]
+Validation: 100%|██████████| 38/38 [00:44<00:00,  1.16s/it]
+Train Loss: 5.0648 | Validation Loss: 4.6843
+New best model found! Saving to unixcoder-cpp-mlm/best_model
+
+==================== Epoch 3/4 ====================
+Training: 100%|██████████| 213/213 [02:58<00:00,  1.20it/s, loss=4.31]
+Validation: 100%|██████████| 38/38 [00:42<00:00,  1.12s/it]
+Train Loss: 4.4614 | Validation Loss: 4.3618
+New best model found! Saving to unixcoder-cpp-mlm/best_model
+Training:   0%|          | 0/213 [00:00<?, ?it/s]
+==================== Epoch 4/4 ====================
+Training: 100%|██████████| 213/213 [03:00<00:00,  1.18it/s, loss=4.72]
+Validation: 100%|██████████| 38/38 [00:40<00:00,  1.07s/it]
+Train Loss: 4.2716 | Validation Loss: 4.2270
+New best model found! Saving to unixcoder-cpp-mlm/best_model

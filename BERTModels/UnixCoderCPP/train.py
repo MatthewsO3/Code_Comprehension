@@ -1,293 +1,315 @@
 """
-UniXcoder-style Masked Language Modeling (MLM) Training for C++
-Streaming version with custom MLM head and sample limit
+Train UniXcoder on MLM task for C++ code.
+Based on the UniXcoder paper - uses unified architecture with mask attention.
+Supports config.json for settings.
 """
-
-import torch
-import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from datasets import load_dataset
-from transformers import (
-    RobertaTokenizer,
-    RobertaModel,
-    get_linear_schedule_with_warmup,
-
-)
-from torch.optim import AdamW
-from tqdm import tqdm
+import os
+import json
 import random
 import numpy as np
+import torch
 from pathlib import Path
-import itertools
-import logging
+from typing import Dict, List
+from dataclasses import dataclass
+from torch.utils.data import Dataset, DataLoader
+from transformers import RobertaForMaskedLM, RobertaTokenizer, get_linear_schedule_with_warmup
+from torch.optim import AdamW
+from tqdm import tqdm
 
 
-# ---------------- Logging ----------------
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
-# ---------------- Reproducibility ----------------
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 set_seed(42)
 
 
-# ---------------- Dataset ----------------
-class CPPCodeDataset(Dataset):
-    """Dataset for C++ code with MLM masking"""
-
-    def __init__(self, dataset_iter, tokenizer, max_length=512, mlm_probability=0.15):
-        # dataset_iter is a list of dicts when sampled from stream
-        self.samples = list(dataset_iter)
+class UniXcoderDataset(Dataset):
+    """
+    Dataset for UniXcoder MLM training.
+    Unlike GraphCodeBERT, UniXcoder doesn't require DFG preprocessing.
+    """
+    def __init__(self, jsonl_file: str, tokenizer, max_length=512):
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.mlm_probability = mlm_probability
+        self.samples = []
+
+        print(f"Loading data from {jsonl_file}...")
+        with open(jsonl_file, 'r', encoding='utf-8') as f:
+            for line in tqdm(f, desc="Loading samples"):
+                try:
+                    self.samples.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        print(f"Loaded {len(self.samples)} samples.")
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        code = self.samples[idx]['code']
+        return self.convert_sample_to_features(self.samples[idx])
 
-        encoding = self.tokenizer(
-            code,
-            max_length=self.max_length,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
-        )
+    def convert_sample_to_features(self, sample: Dict) -> Dict:
+        """
+        Convert code to input features for UniXcoder.
+        UniXcoder uses simpler preprocessing than GraphCodeBERT.
+        """
+        code_tokens = sample['code_tokens']
 
-        input_ids = encoding['input_ids'].squeeze(0)
-        attention_mask = encoding['attention_mask'].squeeze(0)
+        # Truncate if too long
+        if len(code_tokens) > self.max_length - 2:  # -2 for CLS and SEP
+            code_tokens = code_tokens[:self.max_length - 2]
 
-        labels = input_ids.clone()
+        # Add special tokens: [CLS] code [SEP]
+        tokens = [self.tokenizer.cls_token] + code_tokens + [self.tokenizer.sep_token]
 
-        probability_matrix = torch.full(labels.shape, self.mlm_probability)
+        # Convert to IDs
+        input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
 
-        special_tokens_mask = self.tokenizer.get_special_tokens_mask(
-            labels.tolist(), already_has_special_tokens=True
-        )
-        probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
-        probability_matrix.masked_fill_(attention_mask == 0, value=0.0)
+        # Create attention mask (all 1s for UniXcoder encoder mode)
+        # UniXcoder uses different mask patterns for encoder/decoder modes
+        # For MLM (encoder mode), all tokens attend to each other
+        attention_mask = [1] * len(input_ids)
 
-        masked_indices = torch.bernoulli(probability_matrix).bool()
-        labels[~masked_indices] = -100
-
-        # UniXcoder masking rule: 80% mask, 10% random, 10% unchanged
-        indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
-        input_ids[indices_replaced] = self.tokenizer.mask_token_id
-
-        indices_random = torch.bernoulli(torch.full(labels.shape, 0.1)).bool() & masked_indices & ~indices_replaced
-        random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
-        input_ids[indices_random] = random_words[indices_random]
+        # Padding
+        padding_len = self.max_length - len(input_ids)
+        input_ids.extend([self.tokenizer.pad_token_id] * padding_len)
+        attention_mask.extend([0] * padding_len)
 
         return {
-            'input_ids': input_ids,
+            'input_ids': torch.tensor(input_ids),
+            'attention_mask': torch.tensor(attention_mask)
+        }
+
+
+@dataclass
+class MLMCollator:
+    """
+    Data collator for MLM task.
+    Masks tokens according to BERT-style MLM.
+    """
+    tokenizer: RobertaTokenizer
+    mlm_probability: float = 0.15
+
+    def __call__(self, examples: List[Dict]) -> Dict[str, torch.Tensor]:
+        input_ids = torch.stack([ex['input_ids'] for ex in examples])
+        attention_mask = torch.stack([ex['attention_mask'] for ex in examples])
+
+        # Prepare labels and masked input
+        labels = input_ids.clone()
+        masked_ids = input_ids.clone()
+
+        for i in range(len(examples)):
+            # Find positions to mask (exclude special tokens and padding)
+            special_tokens_mask = [
+                1 if token_id in [self.tokenizer.cls_token_id, self.tokenizer.sep_token_id,
+                                  self.tokenizer.pad_token_id] else 0
+                for token_id in input_ids[i].tolist()
+            ]
+
+            # Get maskable positions
+            maskable_positions = [
+                pos for pos, is_special in enumerate(special_tokens_mask)
+                if not is_special
+            ]
+
+            if len(maskable_positions) == 0:
+                continue
+
+            # Calculate number of tokens to mask
+            num_mask = max(1, int(len(maskable_positions) * self.mlm_probability))
+
+            # Randomly select positions
+            mask_positions = random.sample(maskable_positions, min(num_mask, len(maskable_positions)))
+
+            # Apply masking strategy (80% MASK, 10% random, 10% unchanged)
+            for pos in mask_positions:
+                rand = random.random()
+                if rand < 0.8:
+                    # 80% replace with [MASK]
+                    masked_ids[i, pos] = self.tokenizer.mask_token_id
+                elif rand < 0.9:
+                    # 10% replace with random token
+                    masked_ids[i, pos] = random.randint(0, self.tokenizer.vocab_size - 1)
+                # 10% keep original (else clause - do nothing)
+
+            # Set labels: -100 for non-masked tokens
+            mask_indicator = torch.zeros_like(labels[i], dtype=torch.bool)
+            mask_indicator[mask_positions] = True
+            labels[i, ~mask_indicator] = -100
+
+        # Set padding labels to -100
+        labels[input_ids == self.tokenizer.pad_token_id] = -100
+
+        return {
+            'input_ids': masked_ids,
             'attention_mask': attention_mask,
             'labels': labels
         }
 
 
-# ---------------- Model ----------------
-class UniXcoderMLM(nn.Module):
-    """
-    UniXcoder + Custom MLM Head
-    """
-
-    def __init__(self, base_model_name, vocab_size, hidden_size, device):
-        super().__init__()
-        self.device = device
-
-        # Load pretrained UniXcoder encoder
-        self.encoder = RobertaModel.from_pretrained(base_model_name)
-
-        # Custom MLM head
-        self.mlm_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.GELU(),
-            nn.LayerNorm(hidden_size),
-            nn.Linear(hidden_size, vocab_size)
-        ).to(device)
-
-        self.loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
-
-    def forward(self, input_ids, attention_mask=None, labels=None):
-        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
-        hidden_states = outputs.last_hidden_state
-        logits = self.mlm_head(hidden_states)
-
-        loss = None
-        if labels is not None:
-            loss = self.loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
-
-        return {'loss': loss, 'logits': logits}
-
-
-# ---------------- Collate Function ----------------
-def collate_fn(batch):
-    input_ids = torch.stack([item['input_ids'] for item in batch])
-    attention_mask = torch.stack([item['attention_mask'] for item in batch])
-    labels = torch.stack([item['labels'] for item in batch])
-
-    return {
-        'input_ids': input_ids,
-        'attention_mask': attention_mask,
-        'labels': labels
-    }
-
-
-# ---------------- Training & Evaluation ----------------
-def train_epoch(model, dataloader, optimizer, scheduler, device, epoch, grad_accum_steps):
+def train_epoch(model, dataloader, optimizer, scheduler, device):
+    """Train for one epoch."""
     model.train()
     total_loss = 0
-    progress_bar = tqdm(dataloader, desc=f"Epoch {epoch}")
+    progress_bar = tqdm(dataloader, desc="Training")
 
-    optimizer.zero_grad()
+    for batch in progress_bar:
+        optimizer.zero_grad()
 
-    for batch_idx, batch in enumerate(progress_bar):
-        input_ids = batch['input_ids'].to(device)
-        attention_mask = batch['attention_mask'].to(device)
-        labels = batch['labels'].to(device)
+        outputs = model(
+            input_ids=batch['input_ids'].to(device),
+            attention_mask=batch['attention_mask'].to(device),
+            labels=batch['labels'].to(device)
+        )
 
-        outputs = model(input_ids, attention_mask, labels)
-        loss = outputs['loss'] / grad_accum_steps
+        loss = outputs.loss
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
 
-        if (batch_idx + 1) % grad_accum_steps == 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
-
-        total_loss += loss.item() * grad_accum_steps
-
-        progress_bar.set_postfix({
-            'loss': loss.item() * grad_accum_steps,
-            'avg_loss': total_loss / (batch_idx + 1),
-            'lr': scheduler.get_last_lr()[0]
-        })
+        total_loss += loss.item()
+        progress_bar.set_postfix({'loss': loss.item()})
 
     return total_loss / len(dataloader)
 
 
-def evaluate(model, dataloader, device):
+def validate(model, dataloader, device):
+    """Validate the model."""
     model.eval()
     total_loss = 0
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating"):
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
-
-            outputs = model(input_ids, attention_mask, labels)
-            total_loss += outputs['loss'].item()
+        for batch in tqdm(dataloader, desc="Validation"):
+            outputs = model(
+                input_ids=batch['input_ids'].to(device),
+                attention_mask=batch['attention_mask'].to(device),
+                labels=batch['labels'].to(device)
+            )
+            total_loss += outputs.loss.item()
 
     return total_loss / len(dataloader)
 
 
-# ---------------- Main ----------------
 def main():
-    config = {
-        'model_name': 'microsoft/unixcoder-base',
-        'max_length': 512,
-        'batch_size': 1,
-        'learning_rate': 2e-4,
-        'num_epochs': 1,
-        'warmup_steps': 10,
-        'mlm_probability': 0.15,
-        'max_samples': 1000,  # how many samples to stream
-        'save_dir': 'UnixCoderCPP/unixcoder_cpp_mlm',
-        'gradient_accumulation_steps': 4,
-    }
+    import argparse
+    parser = argparse.ArgumentParser(description='Train UniXcoder on MLM for C++')
+    parser.add_argument('--data_file', type=str, default=None)
+    parser.add_argument('--output_dir', type=str, default=None)
+    parser.add_argument('--batch_size', type=int, default=None)
+    parser.add_argument('--epochs', type=int, default=None)
+    parser.add_argument('--learning_rate', type=float, default=None)
+    parser.add_argument('--max_length', type=int, default=None)
+    parser.add_argument('--warmup_steps', type=int, default=None)
+    parser.add_argument('--mlm_probability', type=float, default=None)
+    parser.add_argument('--validation_split', type=float, default=None)
 
+    # Load config from file
+    config = {}
+    if os.path.exists('config.json'):
+        with open('config.json', 'r') as f:
+            full_config = json.load(f)
+            config = full_config.get("train", {})
+
+    parser.set_defaults(**config)
+    args = parser.parse_args()
+
+    if not args.data_file:
+        parser.error("data_file must be specified in config.json or via arguments.")
+
+    # Device setup
     if torch.backends.mps.is_available():
-        device = torch.device("mps")  # ✅ Apple Silicon GPU (Metal)
-        logger.info("Using MPS (Apple Silicon GPU)")
+        device = torch.device("mps")
+        print("Using Apple Silicon GPU (MPS)")
     elif torch.cuda.is_available():
-        device = torch.device("cuda")  # ✅ NVIDIA GPU
-        logger.info("Using CUDA GPU")
+        device = torch.device("cuda")
+        print("Using NVIDIA GPU (CUDA)")
     else:
-        device = torch.device("cpu")  # ✅ CPU fallback
-        logger.info("Using CPU")
+        device = torch.device("cpu")
+        print("Using CPU")
 
-    Path(config['save_dir']).mkdir(parents=True, exist_ok=True)
+    # Create output directory
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    logger.info("Loading tokenizer...")
-    tokenizer = RobertaTokenizer.from_pretrained(config['model_name'])
+    # Load UniXcoder tokenizer and model
+    print("Loading UniXcoder base-nine (trained on C++)...")
+    tokenizer = RobertaTokenizer.from_pretrained("microsoft/unixcoder-base-nine")
 
-    logger.info("Streaming dataset...")
-    stream = load_dataset(
-        "codeparrot/github-code-clean",
-        "C++-all",
-        split='train',
-        streaming=True
+    # UniXcoder base-nine doesn't have MLM head released, so we add it
+    # We load the base model and add MLM head
+    from transformers import RobertaConfig, RobertaModel
+    config_unixcoder = RobertaConfig.from_pretrained("microsoft/unixcoder-base-nine")
+    model = RobertaForMaskedLM(config_unixcoder)
 
+    # Load pretrained weights for the base model (without MLM head)
+    base_model = RobertaModel.from_pretrained("microsoft/unixcoder-base-nine")
+    model.roberta = base_model
+    print("✓ Loaded UniXcoder base-nine with new MLM head")
+
+    model = model.to(device)
+    for param in model.roberta.parameters():
+        param.requires_grad = False
+    print("Base UniXcoder model (roberta) parameters frozen.")
+    # Load dataset
+    full_dataset = UniXcoderDataset(args.data_file, tokenizer, args.max_length)
+    val_size = int(args.validation_split * len(full_dataset))
+    train_dataset, val_dataset = torch.utils.data.random_split(
+        full_dataset, [len(full_dataset) - val_size, val_size]
     )
 
-    # Sample first N examples from the stream
-    sampled_data = list(itertools.islice(stream, config['max_samples']))
-    logger.info(f"Streamed and sampled {len(sampled_data)} examples")
+    # Create dataloaders
+    collator = MLMCollator(tokenizer, mlm_probability=args.mlm_probability)
+    train_dl = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collator,
+        num_workers=min(4, os.cpu_count() or 1)
+    )
+    val_dl = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        collate_fn=collator,
+        num_workers=min(4, os.cpu_count() or 1)
+    )
 
-    # Split manually (95% train, 5% val)
-    split_idx = int(0.95 * len(sampled_data))
-    train_samples = sampled_data[:split_idx]
-    val_samples = sampled_data[split_idx:]
+    # Optimizer and scheduler
+    optimizer = AdamW(model.parameters(), lr=args.learning_rate)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=args.warmup_steps,
+        num_training_steps=len(train_dl) * args.epochs
+    )
 
-    train_data = CPPCodeDataset(train_samples, tokenizer, config['max_length'], config['mlm_probability'])
-    val_data = CPPCodeDataset(val_samples, tokenizer, config['max_length'], config['mlm_probability'])
+    # Print configuration
+    print("\n--- Training Configuration ---")
+    for k, v in vars(args).items():
+        print(f"  {k}: {v}")
+    print("------------------------------\n")
 
-    train_loader = DataLoader(train_data, batch_size=config['batch_size'], shuffle=True, collate_fn=collate_fn, num_workers=0)
-    val_loader = DataLoader(val_data, batch_size=config['batch_size'], shuffle=False, collate_fn=collate_fn, num_workers=0)
-
-    logger.info("Initializing model...")
-    base_model = RobertaModel.from_pretrained(config['model_name'])
-    hidden_size = base_model.config.hidden_size
-
-    model = UniXcoderMLM(config['model_name'], vocab_size=len(tokenizer), hidden_size=hidden_size, device=device)
-    model = model.to(device)
-
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"Total parameters: {total_params:,}")
-    logger.info(f"Trainable parameters: {trainable_params:,}")
-
-    optimizer = AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=0.01,betas=(0.9, 0.999), eps=1e-8)
-    total_steps = len(train_loader) * config['num_epochs'] // config['gradient_accumulation_steps']
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=config['warmup_steps'], num_training_steps=total_steps)
-
-    logger.info("Starting training...")
+    # Training loop
     best_val_loss = float('inf')
+    for epoch in range(args.epochs):
+        print(f"\n{'=' * 20} Epoch {epoch + 1}/{args.epochs} {'=' * 20}")
 
-    for epoch in range(config['num_epochs']):
-        logger.info(f"\nEpoch {epoch + 1}/{config['num_epochs']}")
-        train_loss = train_epoch(model, train_loader, optimizer, scheduler, device, epoch + 1, config['gradient_accumulation_steps'])
-        logger.info(f"Train Loss: {train_loss:.4f}")
+        train_loss = train_epoch(model, train_dl, optimizer, scheduler, device)
+        val_loss = validate(model, val_dl, device)
 
-        val_loss = evaluate(model, val_loader, device)
-        logger.info(f"Val Loss: {val_loss:.4f}")
+        print(f"Train Loss: {train_loss:.4f} | Validation Loss: {val_loss:.4f}")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            logger.info(f"New best model! Saving to {config['save_dir']}")
-            torch.save(model.state_dict(), f"{config['save_dir']}/best_model.pt")
-            tokenizer.save_pretrained(f"{config['save_dir']}/tokenizer")
+            checkpoint_path = Path(args.output_dir) / "best_model"
+            print(f"New best model found! Saving to {checkpoint_path}")
+            model.save_pretrained(checkpoint_path)
+            tokenizer.save_pretrained(checkpoint_path)
 
-            torch.save({
-                'epoch': epoch,
-                'train_loss': train_loss,
-                'val_loss': val_loss,
-                'config': config,
-            }, f"{config['save_dir']}/training_info.pt")
-
-    logger.info("Training complete!")
-    logger.info(f"Best validation loss: {best_val_loss:.4f}")
+    print(f"\n{'=' * 15} Training complete! Best validation loss: {best_val_loss:.4f} {'=' * 15}")
 
 
 if __name__ == "__main__":

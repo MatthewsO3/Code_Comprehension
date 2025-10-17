@@ -1,4 +1,5 @@
-#                             OVERALL STATISTICS                             #
+################################################################################
+#                      OVERALL STATISTICS WITHOUT EDGE PREDICTION             #
 ################################################################################
   Snippets evaluated: 1000
   Total masked tokens: 14503
@@ -7,6 +8,23 @@
   Overall Top-5 Accuracy: 86.11% (12488/14503)
   Overall Perplexity:     26.7652
 ################################################################################
+################################################################################
+#                      OVERALL STATISTICS WITH EDGE PREDICTION             #
+################################################################################
+Train - Total: 1.5143, MLM: 1.0901, Edge: 0.4242
+Val   - Total: 1.2411, MLM: 0.8293, Edge: 0.4118
+New best model! Saving to graphcodebert-cpp-mlm-from-config/best_model
+
+  Snippets evaluated: 1000
+  Total masked tokens: 14503
+--------------------------------------------------------------------------------
+  Overall Top-1 Accuracy: 76.96% (11161/14503)
+  Overall Top-5 Accuracy: 87.50% (12690/14503)
+  Overall Perplexity:     19.2771
+
+
+################################################################################
+
 {
   "train": {
     "data_file": "data/cpp_functions.jsonl",

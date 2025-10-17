@@ -23,6 +23,7 @@ wheels/
 share/python-wheels/
 graphcodebert-cpp-mlm-from-config/
 unixcoder_cpp_mlm/
+best_model/
 *.egg-info/
 .installed.cfg
 *.egg
