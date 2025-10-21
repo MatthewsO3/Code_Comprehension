@@ -1,5 +1,3 @@
-# evaluate_codesearch.py (Corrected Version)
-
 import torch
 import json
 from transformers import RobertaModel, RobertaTokenizer
@@ -13,7 +11,7 @@ import tree_sitter_cpp as tscpp
 
 CPP_LANGUAGE = Language(tscpp.language())
 ts_parser = Parser(CPP_LANGUAGE)
-from CodeSearch_train import extract_dataflow_graph  # Import the DFG function
+from CodeSearch_dataset import extract_dataflow_graph  # Import the DFG function
 
 
 def search(query, model, tokenizer, code_corpus, collator, device, top_k=5):
@@ -22,9 +20,8 @@ def search(query, model, tokenizer, code_corpus, collator, device, top_k=5):
     """
     model.eval()
 
-    # Process the query (this part was already correct)
-    query_tokens = tokenizer.tokenize(query, add_prefix_space=True)
-    query_processed = collator._process_item(query_tokens, [], collator.max_query_len)
+    # Process the query (follows the pattern from training: code="", dfg=[], tokens=query_string, max_len=..., is_code=False)
+    query_processed = collator._process_item("", [], query, collator.max_query_len, is_code=False)
 
     with torch.no_grad():
         query_vec = model(
@@ -46,8 +43,8 @@ def search(query, model, tokenizer, code_corpus, collator, device, top_k=5):
             code_tokens = tokenizer.tokenize(code_string, add_prefix_space=True)
             dfg = extract_dataflow_graph(code_bytes, tree)
 
-            # 3. Process the item with the collator
-            code_processed = collator._process_item(code_tokens, dfg, collator.max_code_len)
+            # 3. Process the item with the collator (follows the pattern from training: code=code_string, dfg=dfg, tokens=code_string, max_len=..., is_code=True)
+            code_processed = collator._process_item(code_string, dfg, code_string, collator.max_code_len, is_code=True)
 
             code_vec = model(
                 input_ids=code_processed[0].unsqueeze(0).to(device),
@@ -90,7 +87,7 @@ if __name__ == '__main__':
     corpus = [json.loads(line) for line in open(data_file_path, 'r', encoding='utf-8')]
 
     queries = [
-        "Sum all elements of an array"
+        "Check if N is a Balanced Prime number or not"
     ]
 
     for q in queries:

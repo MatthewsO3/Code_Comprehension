@@ -29,6 +29,9 @@ best_model/
 graphcodebert-cpp-codesearch-model/
 .installed.cfg
 *.egg
+GraphCodeBert_CPP/
+GraphCodeBert_CPP/idea
+*.DS_Store
 MANIFEST
 
 # PyInstaller

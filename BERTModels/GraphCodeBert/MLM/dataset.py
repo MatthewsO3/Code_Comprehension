@@ -23,21 +23,22 @@ print("✓ Tree-sitter initialized")
 tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
 print("✓ Tokenizer loaded")
 
-
+"""
+Extract data flow graph from C++ code following GraphCodeBERT format
+Maps tree-sitter nodes to their sequential token index (0, 1, 2...)
+Creates edges from variable definitions to uses
+"""
 def extract_dataflow_graph(code_bytes: bytes, tree) -> List[Tuple]:
-    """Extract data flow graph from C++ code following GraphCodeBERT format."""
     root_node = tree.root_node
     var_definitions = defaultdict(list)
     var_uses = defaultdict(list)
     tokens = []
 
-    # This maps tree-sitter nodes to their sequential token index (0, 1, 2...)
-    # This is what DFG edges should be based on.
+
     node_to_token_pos = {}
 
     def extract_tokens_recursive(node):
         if node.type in ['identifier', 'field_identifier']:
-            # This is a variable token
             if id(node) not in node_to_token_pos:
                 node_to_token_pos[id(node)] = len(tokens)
                 tokens.append(node)
@@ -76,18 +77,18 @@ def extract_dataflow_graph(code_bytes: bytes, tree) -> List[Tuple]:
                 dfg_edges.append((var_name, use_pos, "comesFrom", [var_name], [def_pos]))
     return dfg_edges
 
-
+"""
+Preprocess C++ code and extract DFG in GraphCodeBERT format
+Filters out code snippets that are too short/long or have insufficient DFG
+Returns a dictionary with code, tokens, DFG, and metadata
+"""
 def preprocess_code(code: str, idx: int) -> Dict:
-    """Preprocess C++ code and extract DFG in GraphCodeBERT format."""
     try:
         code_bytes = code.encode('utf8')
         tree = ts_parser.parse(code_bytes)
-
-        # Use add_prefix_space=True for consistent tokenization, as recommended for RoBERTa-based models.
-        # This is the key fix for the model learning garbage.
         tokens = tokenizer.tokenize(code, add_prefix_space=True)
 
-        if len(tokens) < 10 or len(tokens) > 450: # Leave room for DFG nodes
+        if len(tokens) < 10 or len(tokens) > 450: #
             return None
 
         dfg = extract_dataflow_graph(code_bytes, tree)
@@ -106,18 +107,22 @@ def preprocess_code(code: str, idx: int) -> Dict:
     except Exception:
         return None
 
-
+"""
+Basic filtering to determine if code snippet should be processed
+Based on length and presence of C++ constructs
+"""
 def should_keep_code(code: str) -> bool:
-    """Filter criteria for C++ code"""
     if len(code) < 100 or len(code) > 10000: return False
     lines = code.count('\n')
     if lines < 3 or lines > 500: return False
     if 'void ' not in code and 'int ' not in code and 'class ' not in code and 'std::' not in code: return False
     return True
 
-
+"""
+Stream dataset, extract DFG, and save in JSONL format.
+"""
 def stream_and_process_dataset(output_file: str, max_samples: int = 10000):
-    """Stream dataset, extract DFG, and save in JSONL format."""
+
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

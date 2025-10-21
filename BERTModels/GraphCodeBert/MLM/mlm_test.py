@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import List, Tuple, Dict
 from collections import defaultdict
 from transformers import RobertaTokenizer, RobertaForMaskedLM
-# ADDED: Import for fetching data from Hugging Face Hub
 from datasets import load_dataset
 
 try:
@@ -29,9 +28,12 @@ except ImportError:
 random.seed(42)
 torch.manual_seed(42)
 
-# Helper function to filter snippets, copied from dfg_extract.py for consistency
+
+"""
+Filter criteria for C++ code
+If snippets aren't function declaration, classes, variable declarations, or use std::, they are skipped.
+"""
 def should_keep_code(code: str) -> bool:
-    """Filter criteria for C++ code"""
     if not code: return False
     if len(code) < 100 or len(code) > 10000: return False
     lines = code.count('\n')
@@ -39,9 +41,14 @@ def should_keep_code(code: str) -> bool:
     if 'void ' not in code and 'int ' not in code and 'class ' not in code and 'std::' not in code: return False
     return True
 
-# Function to fetch test snippets from the database
+
+
+"""
+Fetches valid C++ snippets from the database, skipping the training data.
+Filters out low-quality snippets and those exceeding token length.
+Returns a list of code snippets.
+"""
 def fetch_test_snippets_from_db(skip_n: int, take_n: int, tokenizer: RobertaTokenizer) -> List[str]:
-    """Fetches valid C++ snippets from the database, skipping the training data."""
     print(f"Fetching {take_n} test snippets from 'codeparrot/github-code-clean', skipping the first {skip_n}...")
     print("Applying filter: Snippets must have FEWER THAN 100 tokens.")
 
@@ -49,16 +56,12 @@ def fetch_test_snippets_from_db(skip_n: int, take_n: int, tokenizer: RobertaToke
         dataset = load_dataset("codeparrot/github-code-clean", "C++-all", split="train", streaming=True)
 
         snippets = []
-
-        # MODIFIED: Combined the two filter conditions into one generator expression
-        # It now also checks for the token length.
         filtered_dataset = (
             ex for ex in dataset.skip(skip_n)
             if should_keep_code(ex.get('code')) and
                len(tokenizer.tokenize(ex.get('code'), add_prefix_space=True)) < 100
         )
 
-        # Take the desired number of valid snippets
         for example in filtered_dataset:
             if len(snippets) >= take_n:
                 break
@@ -77,14 +80,20 @@ def fetch_test_snippets_from_db(skip_n: int, take_n: int, tokenizer: RobertaToke
         return []
 
 
+"""
+Uses the trained GraphCodeBERT model and tokenizer to evaluate masked language modeling on C++ snippets.
+Creates dfg on-the-fly using Tree-sitter for the test snippets
+Evaluates a single snippet and returns raw numbers for aggregation
+Creates the masked version of the code, runs it through the model, and prints predictions.
+Calculates top-1 and top-5 accuracy as well as log probabilities for perplexity calculation.
+"""
 class MLMEvaluator:
-    # MODIFIED: The constructor now accepts a tokenizer instance to avoid loading it twice.
     def __init__(self, model_path: str, tokenizer: RobertaTokenizer, device: str = None):
         if not TS_AVAILABLE: raise RuntimeError("Tree-sitter is required.")
         self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
         print(f"Using device: {self.device}")
         print(f"Loading model from {model_path}...")
-        self.tokenizer = tokenizer # Use the passed tokenizer
+        self.tokenizer = tokenizer
         self.model = RobertaForMaskedLM.from_pretrained(model_path).to(self.device).eval()
         print("Model loaded successfully!")
 
@@ -160,12 +169,7 @@ class MLMEvaluator:
         }
 
     def evaluate_snippet(self, code: str, mask_ratio: float, top_k: int) -> Dict:
-        """
-        Evaluates a single snippet and returns raw numbers for aggregation.
-        Still prints the detailed predictions for inspection.
-        """
         print("\n" + "="*80 + "\nORIGINAL CODE:\n" + "-"*80 + f"\n{code.strip()}")
-        # Use add_prefix_space=True for consistency with training data
         code_tokens = self.tokenizer.tokenize(code, add_prefix_space=True)
         if not code_tokens: return None
 
@@ -191,8 +195,7 @@ class MLMEvaluator:
 
             top_preds = self.tokenizer.convert_ids_to_tokens(top_indices)
 
-            # Find the probability of the correct token for perplexity calculation
-            correct_token_prob = 1e-9 # A small value for cases where the correct token is not in top_k
+            correct_token_prob = 1e-9
             found_top5 = False
             for rank, (pred, prob) in enumerate(zip(top_preds, top_probs), 1):
                 marker = "✓" if pred == orig_token else " "
@@ -207,7 +210,6 @@ class MLMEvaluator:
 
             log_probs.append(np.log(correct_token_prob))
 
-        # MODIFIED: Return raw numbers instead of calculated metrics
         return {
             'top1_correct': top1_correct,
             'top5_correct': top5_correct,
@@ -217,9 +219,14 @@ class MLMEvaluator:
 
 # This list is now a fallback if use_database_snippets is false
 CPP_SNIPPETS_FALLBACK = [
-    "int fibonacci(int n) {\n    if (n <= 1) return n;\n    int a = fibonacci(n - 1);\n    int b = fibonacci(n - 2);\n    return a + b;\n}"
+
 ]
 
+"""
+Load configuration from config.json and command-line arguments.
+Fetch test snippets from the database if specified, else use hardcoded snippets.
+Evaluate each snippet and aggregate results for a final summary.
+"""
 def main():
     parser = argparse.ArgumentParser(description='Evaluate GraphCodeBERT MLM model on C++')
     parser.add_argument('--model_path', type=str, default=None)
@@ -230,9 +237,10 @@ def main():
     parser.add_argument('--num_database_snippets', type=int, default=None)
 
     config_from_file = {}
-    if os.path.exists('config.json'):
+    if os.path.exists('/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/config.json'):
         with open('../config.json', 'r') as f:
             config_from_file = json.load(f).get("evaluate", {})
+
     parser.set_defaults(**config_from_file)
     args = parser.parse_args()
 
