@@ -12,22 +12,42 @@
     "validation_split": 0.15
   },
   "evaluate": {
-    "model_path": "graphcodebert-cpp-mlm-from-config/best_model",
+    "model_path": "/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
     "mask_ratio": 0.2,
     "top_k": 5,
     "use_database_snippets": true,
     "training_data_size": 10000,
-    "num_database_snippets": 10
+    "num_database_snippets": 1000
   },
+  "mlm_eval": {
+    "model_path": "/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
+    "device": null,
+    "mask_ratio": 0.2,
+    "top_k": 5,
+    "methods": {
+      "random_mask": {
+        "enabled": false,
+        "mask_ratio": 0.5
+      },
+      "sequential_mask": {
+        "enabled": true
+      },
+      "specific_token_mask": {
+        "enabled": false,
+        "tokens": ["int", "void", "return", "result"]
+      }
+    }
+  },
+
   "codesearch": {
     "processed_data_file": "/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/data/code_docstring_dataset.jsonl",
     "mlm_model_path": "/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
     "output_dir": "CodeSearch/graphcodebert-cpp-codesearch-model",
+    "num_samples": 1000,
     "batch_size": 2,
-    "epochs": 5,
+    "epochs": 3,
     "learning_rate": 2e-5,
     "max_code_len": 256,
-    "max_query_len": 256,
-    "validation_split": 0.1
+    "max_query_len": 256
   }
 }
