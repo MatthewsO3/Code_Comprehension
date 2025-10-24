@@ -1,3 +1,10 @@
+# ============================================================================
+# CodeSearch_train.py - Training pipeline (uses original data, not encoded)
+# ============================================================================
+# NOTE: This file remains largely the same. Training still uses the original
+# preprocessed_data_file to allow the collator to process code+DFG dynamically.
+# The encoded_corpus_file is used separately for evaluation efficiency.
+
 import os
 import json
 import random
@@ -24,8 +31,8 @@ def set_seed(seed=42):
 set_seed(42)
 
 
-# --- Dataset class for preprocessed JSONL ---
 class CodeSearchDataset(Dataset):
+    """Load preprocessed dataset with code, docstring, and DFG."""
     def __init__(self, jsonl_file: str):
         print(f"Loading preprocessed samples from {jsonl_file}...")
         self.samples = []
@@ -40,7 +47,6 @@ class CodeSearchDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        # Return already-processed data
         sample = self.samples[idx]
         return {
             'code': sample['code'],
@@ -50,6 +56,7 @@ class CodeSearchDataset(Dataset):
 
 
 class CodeSearchCollator:
+    """Process code/query data into model inputs with DFG attention."""
     def __init__(self, tokenizer, max_code_len, max_query_len):
         self.tokenizer = tokenizer
         self.max_code_len = max_code_len
@@ -57,7 +64,7 @@ class CodeSearchCollator:
 
     def _process_item(self, code, dfg, tokens, max_len, is_code=True):
         """Process code or query into model input."""
-        if is_code and dfg:  # This is code with DFG
+        if is_code and dfg:  # Code with DFG
             code_tokens = self.tokenizer.tokenize(code, add_prefix_space=True)
 
             # Build DFG node map
@@ -80,10 +87,56 @@ class CodeSearchCollator:
                     if use_pos in node_map and def_pos in node_map:
                         adj[node_map[use_pos]].append(node_map[def_pos])
 
-            # Truncate tokens to fit max_len
-            max_code_tok_len = max_len - len(node_map) - 3
+            # Truncate both tokens AND DFG nodes to fit within max_len
+            # Format: [CLS] code_tokens [SEP] dfg_nodes [SEP]
+            # So we need: 1 + code_len + 1 + dfg_len + 1 <= max_len
+            # Available space: max_len - 3
+            available_space = max_len - 3
+
+            # Start by allocating space: give priority to code tokens
+            max_code_tok_len = max(available_space - len(node_map), available_space // 2)
+            max_dfg_nodes = available_space - max_code_tok_len
+
+            # Truncate code tokens
             if len(code_tokens) > max_code_tok_len:
                 code_tokens = code_tokens[:max_code_tok_len]
+                # Rebuild node_map after truncating code
+                node_map = {}
+                for edge in dfg:
+                    use_pos = edge[1]
+                    dep_list = edge[4]
+                    for pos in [use_pos] + dep_list:
+                        if pos < len(code_tokens) and pos not in node_map:
+                            node_map[pos] = len(node_map)
+                # Rebuild adjacency list
+                adj = defaultdict(list)
+                for edge in dfg:
+                    use_pos = edge[1]
+                    dep_list = edge[4]
+                    for def_pos in dep_list:
+                        if use_pos in node_map and def_pos in node_map:
+                            adj[node_map[use_pos]].append(node_map[def_pos])
+
+            # Truncate DFG nodes if needed
+            if len(node_map) > max_dfg_nodes:
+                # Keep only the first max_dfg_nodes
+                old_to_new = {}
+                new_node_map = {}
+                idx = 0
+                for old_pos in sorted(node_map.keys()):
+                    if idx < max_dfg_nodes:
+                        old_to_new[node_map[old_pos]] = idx
+                        new_node_map[old_pos] = idx
+                        idx += 1
+                node_map = new_node_map
+                # Update adjacency list
+                new_adj = defaultdict(list)
+                for u_idx, v_indices in adj.items():
+                    if u_idx in old_to_new:
+                        for v_idx in v_indices:
+                            if v_idx in old_to_new:
+                                new_adj[old_to_new[u_idx]].append(old_to_new[v_idx])
+                adj = new_adj
 
             # Build input
             input_tokens = [self.tokenizer.cls_token] + code_tokens + [self.tokenizer.sep_token]
@@ -98,23 +151,42 @@ class CodeSearchCollator:
             attn_mask = np.zeros((max_len, max_len), dtype=bool)
             code_len = len(code_tokens) + 2
             attn_mask[:code_len, :code_len] = True
-            for i in range(len(input_tokens)):
+            # Cap at max_len to avoid index out of bounds
+            for i in range(min(len(input_tokens), max_len)):
                 attn_mask[i, i] = True
 
             # Connect code tokens to DFG nodes
             for code_pos, node_idx in node_map.items():
                 if code_pos < len(code_tokens):
-                    attn_mask[dfg_start + node_idx, code_pos + 1] = True
-                    attn_mask[code_pos + 1, dfg_start + node_idx] = True
+                    dfg_idx = dfg_start + node_idx
+                    code_idx = code_pos + 1
+                    # Only connect if within bounds
+                    if dfg_idx < max_len and code_idx < max_len:
+                        attn_mask[dfg_idx, code_idx] = True
+                        attn_mask[code_idx, dfg_idx] = True
 
             # Connect DFG nodes
             for u_idx, v_indices in adj.items():
                 for v_idx in v_indices:
-                    attn_mask[dfg_start + u_idx, dfg_start + v_idx] = True
-                    attn_mask[dfg_start + v_idx, dfg_start + u_idx] = True
+                    u_pos = dfg_start + u_idx
+                    v_pos = dfg_start + v_idx
+                    # Only connect if within bounds
+                    if u_pos < max_len and v_pos < max_len:
+                        attn_mask[u_pos, v_pos] = True
+                        attn_mask[v_pos, u_pos] = True
 
-            attn_mask = attn_mask.tolist()
-        else:  # This is a query (no DFG)
+            # Ensure attn_mask is always max_len x max_len
+            attn_mask_array = np.array(attn_mask, dtype=bool)
+            if attn_mask_array.shape[0] != max_len or attn_mask_array.shape[1] != max_len:
+                # Pad attention mask to max_len x max_len
+                padded_mask = np.zeros((max_len, max_len), dtype=bool)
+                actual_len = min(attn_mask_array.shape[0], max_len)
+                padded_mask[:actual_len, :actual_len] = attn_mask_array[:actual_len, :actual_len]
+                attn_mask = padded_mask.tolist()
+            else:
+                attn_mask = attn_mask_array.tolist()
+
+        else:  # Query without DFG
             query_tokens = self.tokenizer.tokenize(tokens, add_prefix_space=True)
             if len(query_tokens) > max_len - 2:
                 query_tokens = query_tokens[:max_len - 2]
@@ -126,10 +198,17 @@ class CodeSearchCollator:
 
         # Pad to max_len
         padding_len = max_len - len(input_ids)
-        input_ids.extend([self.tokenizer.pad_token_id] * padding_len)
-        position_ids.extend([0] * padding_len)
+        if padding_len < 0:
+            # Should not happen now, but just in case, truncate
+            input_ids = input_ids[:max_len]
+            position_ids = position_ids[:max_len]
+            padding_len = 0
+        else:
+            input_ids.extend([self.tokenizer.pad_token_id] * padding_len)
+            position_ids.extend([0] * padding_len)
 
-        return torch.tensor(input_ids), torch.tensor(attn_mask), torch.tensor(position_ids)
+        return torch.tensor(input_ids, dtype=torch.long), torch.tensor(attn_mask, dtype=torch.bool), torch.tensor(
+            position_ids, dtype=torch.long)
 
     def __call__(self, batch):
         code_batch = []
@@ -157,6 +236,7 @@ class CodeSearchCollator:
 
 
 def train_epoch(model, dataloader, optimizer, scheduler, device):
+    """Train one epoch with contrastive loss."""
     model.train()
     total_loss = 0
     cos = nn.CosineSimilarity(dim=1)
@@ -190,24 +270,48 @@ def train_epoch(model, dataloader, optimizer, scheduler, device):
     return total_loss / len(dataloader)
 
 
+
+
 def main():
-    with open('/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/config.json') as f:
+    script_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
+    with open(config_path)as f:
         config = json.load(f).get('codesearch')
 
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    print(f"Using device: {device}")
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+        print("Using Apple Silicon GPU (MPS)")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+        print("Using NVIDIA GPU (CUDA)")
+    else:
+        device = torch.device("cpu")
+        print("Using CPU")
 
-    tokenizer = RobertaTokenizer.from_pretrained(config['mlm_model_path'])
-    model = RobertaModel.from_pretrained(config['mlm_model_path']).to(device)
+    script_dir = Path(__file__).parent.absolute()
+    model_dir = Path(config['mlm_model_path'])
+    # Navigate up to repo root, then to config
+    model_path = script_dir.parent.parent / model_dir
+    tokenizer = RobertaTokenizer.from_pretrained(model_path)
+    model = RobertaModel.from_pretrained(model_path).to(device)
 
+    script_dir = Path(__file__).parent.absolute()
     output_dir = Path(config['output_dir'])
+    # Navigate up to repo root, then to config
+    output_dir = script_dir.parent.parent / output_dir
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load preprocessed dataset
-    dataset = CodeSearchDataset(config['processed_data_file'])
+    script_dir = Path(__file__).parent.absolute()
+    data_dir = Path(config['processed_data_file'])
+    # Navigate up to repo root, then to config
+    data_path = script_dir.parent.parent / data_dir
+    # Load preprocessed dataset (not encoded, allows dynamic collator processing)
+    dataset = CodeSearchDataset(data_path)
     collator = CodeSearchCollator(tokenizer, config['max_code_len'], config['max_query_len'])
 
-    # Set num_workers based on device
     num_workers = 0 if device.type == 'mps' else min(4, os.cpu_count() or 1)
 
     train_dl = DataLoader(
@@ -230,10 +334,10 @@ def main():
         train_loss = train_epoch(model, train_dl, optimizer, scheduler, device)
         print(f"Training Loss: {train_loss:.4f}")
 
-        checkpoint_path = output_dir / f"checkpoint_epoch_{epoch + 1}"
-        model.save_pretrained(checkpoint_path)
-        tokenizer.save_pretrained(checkpoint_path)
-        print(f"Saved checkpoint to {checkpoint_path}")
+    checkpoint_path = output_dir / "best_model"
+    model.save_pretrained(checkpoint_path)
+    tokenizer.save_pretrained(checkpoint_path)
+    print(f"Saved checkpoint to {checkpoint_path}")
 
 
 if __name__ == '__main__':
