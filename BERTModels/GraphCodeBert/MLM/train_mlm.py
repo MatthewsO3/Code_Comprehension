@@ -328,9 +328,12 @@ def main():
     parser.add_argument('--mlm_probability', type=float, default=None)
     parser.add_argument('--validation_split', type=float, default=None)
 
-    config = {}
-    if os.path.exists('config.json'):
-        with open('../config.json', 'r') as f:
+    script_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
             config = json.load(f).get("train", {})
     parser.set_defaults(**config)
     args = parser.parse_args()
@@ -349,8 +352,11 @@ def main():
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
     model = GraphCodeBERTWithEdgePrediction("microsoft/graphcodebert-base").to(device)
+    data_dir = Path(__file__).parent.absolute()
 
-    full_dataset = GraphCodeBERTDataset(args.data_file, tokenizer, args.max_length)
+    # Navigate up to repo root, then to config
+    data_path = data_dir.parent.parent / args.data_file
+    full_dataset = GraphCodeBERTDataset(data_path, tokenizer, args.max_length)
     val_size = int(args.validation_split * len(full_dataset))
     train_dataset, val_dataset = torch.utils.data.random_split(
         full_dataset, [len(full_dataset) - val_size, val_size]

@@ -236,9 +236,12 @@ def main():
     parser.add_argument('--training_data_size', type=int, default=None)
     parser.add_argument('--num_database_snippets', type=int, default=None)
 
-    config_from_file = {}
-    if os.path.exists('/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/config.json'):
-        with open('../config.json', 'r') as f:
+    script_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
             config_from_file = json.load(f).get("evaluate", {})
 
     parser.set_defaults(**config_from_file)

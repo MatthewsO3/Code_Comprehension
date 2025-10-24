@@ -1,3 +1,7 @@
+# ============================================================================
+# CodeSearch_dataset.py - OPTIMIZED with pre-computed corpus encoding
+# ============================================================================
+
 import json
 import os
 from pathlib import Path
@@ -5,16 +9,22 @@ from collections import defaultdict
 from datasets import load_dataset
 from tree_sitter import Language, Parser
 import tree_sitter_cpp as tscpp
-from transformers import RobertaTokenizer
+from transformers import RobertaTokenizer, RobertaModel
 from tqdm import tqdm
+import torch
+from pathlib import Path
+import numpy as np
 
 # Initialize Tree-sitter and Tokenizer
 CPP_LANGUAGE = Language(tscpp.language())
 ts_parser = Parser(CPP_LANGUAGE)
 
-# Use a public model instead of local path
 try:
-    tokenizer = RobertaTokenizer.from_pretrained("/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model")
+    token_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    token_path = token_dir.parent.parent / 'GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model'
+    tokenizer = RobertaTokenizer.from_pretrained(token_path)
 except:
     print("Warning: Could not load tokenizer. Using default RobertaTokenizer.")
     tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
@@ -71,12 +81,9 @@ def extract_dataflow_graph(code_bytes, tree):
                     def_pos = preceding_defs[-1]
                     dfg_edges.append([var_name, use_pos, "comesFrom", [var_name], [def_pos]])
 
-        # Return empty list instead of None if no edges found (still valid)
         return dfg_edges
     except Exception as e:
-        # Log the error for debugging
-        # print(f"DFG extraction error: {str(e)}")
-        return []  # Return empty list instead of None
+        return []
 
 
 def process_sample(sample):
@@ -85,31 +92,26 @@ def process_sample(sample):
         code = sample.get('code', '').strip()
         docstring = sample.get('docstring', '').strip()
 
-        # Check if code and docstring are valid
-        if not code or len(code) < 10:  # Minimum code length
+        if not code or len(code) < 10:
             return None
 
-        if not docstring or len(docstring) < 5:  # Minimum docstring length
+        if not docstring or len(docstring) < 5:
             return None
 
-        # Extract DFG
         code_bytes = code.encode('utf8')
         tree = ts_parser.parse(code_bytes)
 
-        # Check if parse tree is valid
         if tree.root_node.child_count == 0:
             return None
 
         dfg = extract_dataflow_graph(code_bytes, tree)
 
-        # Accept samples even with empty DFG (they still have valid code structure)
         return {
             'code': code,
             'docstring': docstring,
             'dfg': dfg if dfg is not None else []
         }
     except Exception as e:
-        # print(f"Sample processing error: {str(e)}")
         return None
 
 
@@ -117,7 +119,6 @@ def preprocess_dataset(output_path, num_samples=None):
     """Stream dataset, extract DFG, and save to JSONL."""
     print(f"Loading streaming dataset from codeparrot/xlcost-text-to-code...")
     try:
-        # Try to load with specific config first
         ds = load_dataset(
             "codeparrot/xlcost-text-to-code",
             "C++-program-level",
@@ -129,7 +130,6 @@ def preprocess_dataset(output_path, num_samples=None):
         print(f"Failed to load with config: {str(e)}")
         print("Trying without config...")
         try:
-            # Fallback: load without specific config
             ds = load_dataset(
                 "codeparrot/xlcost-text-to-code",
                 split="train",
@@ -161,10 +161,7 @@ def preprocess_dataset(output_path, num_samples=None):
                 break
 
             try:
-                # Extract single sample from batch
-                # The dataset has 'code' and 'text' columns
                 if 'code' not in batch or 'text' not in batch:
-                    # Print available keys on first miss
                     if skipped_count == 0:
                         print(f"Available batch keys: {list(batch.keys())}")
                     skipped_count += 1
@@ -173,7 +170,6 @@ def preprocess_dataset(output_path, num_samples=None):
                 code = batch['code']
                 text = batch['text']
 
-                # Extract first element if it's a list
                 if isinstance(code, (list, tuple)):
                     code = code[0] if code else None
                 if isinstance(text, (list, tuple)):
@@ -183,15 +179,10 @@ def preprocess_dataset(output_path, num_samples=None):
                     skipped_count += 1
                     continue
 
-                sample = {
-                    'code': code,
-                    'docstring': text
-                }
-
+                sample = {'code': code, 'docstring': text}
                 processed_sample = process_sample(sample)
 
                 if processed_sample is not None:
-                    # Write to JSONL
                     f_out.write(json.dumps(processed_sample, ensure_ascii=False) + '\n')
                     processed_count += 1
                     pbar.set_postfix({'processed': processed_count, 'skipped': skipped_count})
@@ -200,8 +191,6 @@ def preprocess_dataset(output_path, num_samples=None):
 
             except Exception as e:
                 skipped_count += 1
-                # Uncomment to debug specific errors
-                # print(f"Error processing batch {idx}: {str(e)}")
                 continue
 
     print(f"\n✓ Preprocessing complete!")
@@ -213,11 +202,82 @@ def preprocess_dataset(output_path, num_samples=None):
     return processed_count, skipped_count
 
 
+def encode_corpus(model, tokenizer, collator, input_jsonl, output_jsonl, device, batch_size=32):
+    """
+    Pre-compute and cache encoded corpus vectors.
+
+    Args:
+        model: RoBERTa model for encoding
+        tokenizer: RoBERTa tokenizer
+        collator: CodeSearchCollator for processing
+        input_jsonl: Path to preprocessed dataset
+        output_jsonl: Path to save encoded corpus
+        device: torch device
+        batch_size: Encoding batch size
+    """
+    print(f"\nEncoding corpus from {input_jsonl}...")
+
+    # Load samples
+    samples = []
+    with open(input_jsonl, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.strip():
+                samples.append(json.loads(line))
+
+    print(f"Loaded {len(samples)} samples for encoding")
+
+    model.eval()
+
+    with open(output_jsonl, 'w', encoding='utf-8') as f_out:
+        with torch.no_grad():
+            for i in tqdm(range(0, len(samples), batch_size), desc="Encoding corpus"):
+                batch_samples = samples[i:i + batch_size]
+
+                # Process batch with collator
+                processed_codes = []
+                for sample in batch_samples:
+                    code = sample['code']
+                    dfg = sample['dfg']
+                    code_processed = collator._process_item(
+                        code, dfg, code, collator.max_code_len, is_code=True
+                    )
+                    processed_codes.append(code_processed)
+
+                # Stack batch
+                code_ids = torch.stack([c[0] for c in processed_codes]).to(device)
+                code_mask = torch.stack([c[1] for c in processed_codes]).to(device)
+                code_pos = torch.stack([c[2] for c in processed_codes]).to(device)
+
+                # Encode
+                code_vecs = model(
+                    input_ids=code_ids,
+                    attention_mask=code_mask,
+                    position_ids=code_pos
+                ).pooler_output
+
+                # Save with embeddings
+                for j, sample in enumerate(batch_samples):
+                    embedding = code_vecs[j].cpu().numpy().tolist()
+                    output_sample = {
+                        'code': sample['code'],
+                        'docstring': sample['docstring'],
+                        'dfg': sample['dfg'],
+                        'embedding': embedding
+                    }
+                    f_out.write(json.dumps(output_sample, ensure_ascii=False) + '\n')
+
+    print(f"✓ Corpus encoded and saved to {output_jsonl}")
+
+
 if __name__ == '__main__':
     import json as cfg_json
 
-    # Load config
-    config_path = '/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/config.json'
+
+    # Get the directory where this script is located
+    script_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
     try:
         with open(config_path) as f:
             config = cfg_json.load(f).get('codesearch')
@@ -226,11 +286,21 @@ if __name__ == '__main__':
         print("Using default settings...")
         config = {
             'processed_data_file': './data/code_docstring_dataset.jsonl',
+            'encoded_corpus_file': './data/encoded_corpus.jsonl',
             'num_samples': None
         }
-
-    # Get output path and num_samples from config
     output_file = config.get('processed_data_file')
+    script_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    output_file = script_dir.parent.parent / output_file
+
+
+    encoded_corpus_file = config.get('encoded_corpus_file', './data/encoded_corpus.jsonl')
+    script_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    encoded_corpus_file = script_dir.parent.parent / encoded_corpus_file
     num_samples = config.get('num_samples')
 
     if not output_file:
@@ -238,8 +308,46 @@ if __name__ == '__main__':
 
     print(f"Config loaded:")
     print(f"  Output file: {output_file}")
+    print(f"  Encoded corpus file: {encoded_corpus_file}")
     print(f"  Num samples: {num_samples if num_samples else 'all available'}")
     print()
 
+    # Step 1: Preprocess dataset
     processed, skipped = preprocess_dataset(output_file, num_samples=num_samples)
-    print(f"\nDataset preprocessing finished. Ready to train!")
+    print(f"\nDataset preprocessing finished!")
+
+    # Step 2: Encode corpus
+    print("\n" + "=" * 60)
+    print("Now encoding corpus for efficient retrieval...")
+    print("=" * 60)
+
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+        print("Using Apple Silicon GPU (MPS)")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+        print("Using NVIDIA GPU (CUDA)")
+    else:
+        device = torch.device("cpu")
+        print("Using CPU")
+
+
+    from CodeSearch_train import CodeSearchCollator
+
+    model_path = config['mlm_model_path']
+    model_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    mod_path = model_dir.parent.parent / model_path
+
+    tokenizer = RobertaTokenizer.from_pretrained(mod_path)
+    model = RobertaModel.from_pretrained(mod_path).to(device)
+    collator = CodeSearchCollator(tokenizer, config['max_code_len'], config['max_query_len'])
+
+    encode_corpus(
+        model, tokenizer, collator,
+        output_file, encoded_corpus_file,
+        device, batch_size=config.get('batch_size', 32)
+    )
+
+    print(f"\n✓ Complete! Ready for training and evaluation.")

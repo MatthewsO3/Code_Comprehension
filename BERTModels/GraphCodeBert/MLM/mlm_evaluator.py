@@ -291,17 +291,32 @@ class MLMEvaluator:
 
 def main():
     # Load configuration
-    config_path = '/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/config.json'
+    script_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
     with open(config_path, 'r') as f:
         config = json.load(f).get('mlm_eval', {})
 
     model_path = config.get('model_path', './model')
-    device = config.get('device', None)
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+        print("Using Apple Silicon GPU (MPS)")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+        print("Using NVIDIA GPU (CUDA)")
+    else:
+        device = torch.device("cpu")
+        print("Using CPU")
 
     # Load tokenizer and model
-    print(f"Loading tokenizer from {model_path}...")
-    tokenizer = RobertaTokenizer.from_pretrained(model_path)
-    evaluator = MLMEvaluator(model_path, tokenizer, device)
+    model_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    mod_path = model_dir.parent.parent / model_path
+    print(f"Loading tokenizer from {mod_path}...")
+    tokenizer = RobertaTokenizer.from_pretrained(mod_path)
+    evaluator = MLMEvaluator(mod_path, tokenizer, device)
 
     # Example C++ code snippet
     cpp_snippet = """
