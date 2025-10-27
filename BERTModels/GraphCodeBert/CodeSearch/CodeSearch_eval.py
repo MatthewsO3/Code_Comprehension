@@ -60,7 +60,6 @@ def search(query, model, tokenizer, corpus, embeddings, collator, device, top_k=
 
     # Process the query
     query_processed = collator._process_item("", [], query, collator.max_query_len, is_code=False)
-
     with torch.no_grad():
         query_vec = model(
             input_ids=query_processed[0].unsqueeze(0).to(device),
@@ -137,10 +136,15 @@ if __name__ == '__main__':
     # Navigate up to repo root, then to config
     config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
     config = json.load(open(config_path)).get('codesearch')
+    script_dir = Path(__file__).parent.absolute()
 
     # Use pre-encoded corpus file
-    encoded_corpus_file = config.get('encoded_corpus_file', './data/encoded_corpus.jsonl')
-    model_path = f"{config['output_dir']}/checkpoint_epoch_{config['epochs']}"
+    encoded_corpus_file = script_dir.parent.parent / config.get('encoded_corpus_file')
+    script_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    model_path = script_dir.parent.parent / config['output_dir']/"best_model"   #'output_dir'
+
 
     if torch.backends.mps.is_available():
         device = torch.device("mps")
@@ -160,15 +164,13 @@ if __name__ == '__main__':
 
     # Example queries
     queries = [
-        "Program to check if N is a Centered Cubic Number | C ++ program to check if N is a centered cubic number ; Function to check if the number N is a centered cubic number ; Iterating from 1 ; Infinite loop ; Finding ith_term ; Checking if the number N is a Centered cube number ; If ith_term > N then N is not a Centered cube number ; Incrementing i ; Driver code ; Function call",
-        "Check if number is prime",
-        "Sort array ascending"
+        "Maximum Prefix Sum"
     ]
 
     # Search single query
     print("Single Query Search:")
-    search(queries[0], model, tokenizer, corpus, embeddings, collator, device, top_k=3)
+    search(queries[0], model, tokenizer, corpus, embeddings, collator, device, top_k=10)
 
     # Search batch queries
-    print("\n\nBatch Query Search:")
-    search_batch(queries, model, tokenizer, corpus, embeddings, collator, device, top_k=3)
+    #print("\n\nBatch Query Search:")
+    #search_batch(queries, model, tokenizer, corpus, embeddings, collator, device, top_k=3)
