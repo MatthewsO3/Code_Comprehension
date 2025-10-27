@@ -1,3 +1,26 @@
+################################################################################
+#                             OVERALL STATISTICS                             #
+################################################################################
+  Snippets evaluated: 1000
+  Total masked tokens: 14227
+--------------------------------------------------------------------------------
+  Overall Top-1 Accuracy: 84.33% (11997/14227)
+  Overall Top-5 Accuracy: 92.34% (13137/14227)
+  Overall Perplexity:     6.4967
+
+  data_file: data/unixcoder_cpp.jsonl
+  output_dir: unixcoder-cpp-mlm
+  batch_size: 8
+  epochs: 8
+  learning_rate: 0.0002
+  max_length: 512
+  warmup_steps: 500
+  mlm_probability: 0.15
+  validation_split: 0.15
+Train Loss: 0.5459 | Validation Loss: 0.5971 - Epoch 8
+################################################################################
+
+
 Loading data from data/unixcoder_cpp.jsonl...
 Loading samples: 10000it [00:00, 25596.45it/s]
 Loaded 10000 samples.
