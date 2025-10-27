@@ -45,10 +45,10 @@
     "mlm_model_path": "GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
     "output_dir": "GraphCodeBert/CodeSearch/CodeSearch/graphcodebert-cpp-codesearch-model",
     "num_samples": 10000,
-    "batch_size": 3,
-    "epochs": 1,
+    "batch_size": 16,
+    "epochs": 3,
     "learning_rate": 2e-5,
-    "max_code_len": 128,
-    "max_query_len": 256
+    "max_code_len": 256,
+    "max_query_len": 128
   }
 }
