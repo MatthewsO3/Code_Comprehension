@@ -121,7 +121,7 @@ def should_keep_code(code: str) -> bool:
 """
 Stream dataset, extract DFG, and save in JSONL format.
 """
-def stream_and_process_dataset(output_file: str, max_samples: int = 10000):
+def stream_and_process_dataset(output_file: str, max_samples: int = None):
 
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,9 +130,9 @@ def stream_and_process_dataset(output_file: str, max_samples: int = 10000):
     dataset = load_dataset("codeparrot/github-code-clean", "C++-all", split="train", streaming=True)
 
     processed_count = 0
-    with open(output_path, 'w', encoding='utf-8') as f, tqdm(total=max_samples, desc="Processing C++ files") as pbar:
+    with open(output_path, 'w', encoding='utf-8') as f, tqdm(desc="Processing C++ files") as pbar:
         for example in dataset:
-            if processed_count >= max_samples:
+            if max_samples and processed_count >= max_samples:
                 break
 
             code = example.get('code')
@@ -153,10 +153,11 @@ def stream_and_process_dataset(output_file: str, max_samples: int = 10000):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Extract DFG from C++ code')
-    parser.add_argument('--output_file', type=str, default='data/cpp_functions.jsonl',
+    data_dir = Path(__file__).parent.parent.absolute()
+    data_file = data_dir / 'data' / 'cpp_functions.jsonl'
+    parser.add_argument('--output_file', type=str, default=data_file,
                         help='Output JSONL file for processed data')
-    parser.add_argument('--max_samples', type=int, default=10000,
-                        help='Maximum number of samples to process')
+    parser.add_argument('--max_samples', type=int, default=10,
+                        help='Maximum number of samples to process (None for all)')
     args = parser.parse_args()
     stream_and_process_dataset(args.output_file, args.max_samples)
-
