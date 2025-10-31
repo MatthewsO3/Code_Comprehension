@@ -1,6 +1,73 @@
-{
-  "mrr": 0.25070614393834295,
-  "recall@1": 0.15,
-  "recall@5": 0.29,
-  "recall@10": 0.47
-} 100 eval - 100 train
+============================================================
+Evaluation Results
+============================================================
+  mrr: 0.7643
+  map: 0.7643
+  recall@1: 0.6835
+  recall@5: 0.8626
+  recall@10: 0.9070
+  recall@100: 0.9835
+  recall@1000: 0.9991
+============================================================
+============================================================
+Evaluation Configuration
+============================================================
+  Model path: /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/BERTModels/GraphCodeBert/graphcodebert-cpp-codesearch/best_model
+  Eval data: /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/data/eval.jsonl
+  Distractor data: /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/data/distractors.jsonl
+  Code length: 256
+  NL length: 128
+  Batch size: 16
+============================================================
+
+10/31/2025 22:21:29 - INFO - __main__ - ***** Running evaluation *****
+10/31/2025 22:21:29 - INFO - __main__ - Loading datasets...
+10/31/2025 22:21:29 - INFO - __main__ - Loaded 1150 docstrings from /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/data/eval.jsonl
+10/31/2025 22:21:29 - INFO - __main__ - Loaded 1150 code examples from /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/data/eval.jsonl
+10/31/2025 22:21:29 - INFO - __main__ - Loaded 1147 code examples from /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/data/distractors.jsonl
+
+
+Epoch 8/8
+============================================================
+Training: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 469/469 [06:19<00:00,  1.24batch/s, Loss=0.0278, CE=0.0249, Neg=0.0048]
+
+Epoch 8 Results:
+  Total Loss: 0.0278
+  CE Loss:    0.0249
+  Neg Loss:   0.0048
+
+
+============================================================
+Training Configuration
+============================================================
+  train_data_file: /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/data/training_data.jsonl
+  output_dir: /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/BERTModels/GraphCodeBert/graphcodebert-cpp-codesearch
+  model_name_or_path: /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/MLM/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model
+  tokenizer_name: /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/MLM/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model
+  config_name: /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/MLM/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model
+  nl_length: 128
+  code_length: 256
+  train_batch_size: 16
+  learning_rate: 2e-05
+  max_grad_norm: 1.0
+  num_train_epochs: 8
+  margin: 0.9
+  neg_weight: 0.6
+  seed: 42
+  early_stopping_patience: 3
+  early_stopping_delta: 0.001
+  n_gpu: 1
+  device: cuda
+============================================================
+
+10/31/2025 21:23:41 - INFO - __main__ - Loaded 7500 examples from /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/data/training_data.jsonl
+10/31/2025 21:23:41 - INFO - __main__ - *** Sample Example ***
+10/31/2025 21:23:41 - INFO - __main__ - Code: #include <bits/stdc++.h> NEW_LINE using namespace std ; int maxPresum ( vector < int > a , vector < ...
+10/31/2025 21:23:41 - INFO - __main__ - Good: Stores the maximum prefix sum of the array A [ ] ; Traverse the array A [ ] ; Stores the maximum pre...
+10/31/2025 21:23:41 - INFO - __main__ - Bad1: Implementation of factorial function ; Function to find GCD of factorial of elements from array ; fi...
+10/31/2025 21:23:41 - INFO - __main__ - ***** Running training *****
+10/31/2025 21:23:41 - INFO - __main__ -   Num examples = 7500
+10/31/2025 21:23:41 - INFO - __main__ -   Num Epochs = 8
+10/31/2025 21:23:41 - INFO - __main__ -   Total train batch size = 16
+10/31/2025 21:23:41 - INFO - __main__ -   Total optimization steps = 3752
+10/31/2025 21:23:41 - INFO - __main__ -   Warmup steps = 375
