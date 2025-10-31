@@ -11,7 +11,7 @@ import argparse
 from pathlib import Path
 from typing import List, Dict
 
-from onnx.compose import add_prefix
+
 from transformers import RobertaTokenizer, RobertaForMaskedLM
 from datasets import load_dataset
 

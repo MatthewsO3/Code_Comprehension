@@ -40,15 +40,26 @@
   },
 
   "codesearch": {
-    "processed_data_file": "GraphCodeBert/data/code_docstring_dataset.jsonl",
-    "encoded_corpus_file": "GraphCodeBert/data/encoded_corpus_cpp.jsonl",
-    "mlm_model_path": "GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
-    "output_dir": "GraphCodeBert/CodeSearch/CodeSearch/graphcodebert-cpp-codesearch-model",
-    "num_samples": 10000,
-    "batch_size": 16,
-    "epochs": 3,
+    "train_data_file": "data/training_data.jsonl",
+    "output_dir": "CodeSearch/graphcodebert-cpp-codesearch",
+    "model_name_or_path": "graphcodebert-cpp-mlm-from-config/best_model",
+    "tokenizer_name": "graphcodebert-cpp-mlm-from-config/best_model",
+    "config_name": "graphcodebert-cpp-mlm-from-config/best_model",
+    "model_type": "pretrained_checkpoint",
+    "train_batch_size": 4,
+    "eval_batch_size": 16,
     "learning_rate": 2e-5,
-    "max_code_len": 256,
-    "max_query_len": 128
+    "max_grad_norm": 1.0,
+    "num_train_epochs": 3,
+    "warmup_steps": 10,
+    "code_length": 256,
+    "nl_length": 128,
+    "margin": 0.5,
+    "neg_weight": 0.5,
+    "seed": 42,
+    "evaluation": {
+      "eval_data_file": "data/eval.jsonl",
+      "output_file": "data/eval_results.json"
+    }
   }
 }

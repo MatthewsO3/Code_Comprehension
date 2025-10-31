@@ -1,353 +1,217 @@
-# ============================================================================
-# CodeSearch_dataset.py - OPTIMIZED with pre-computed corpus encoding
-# ============================================================================
-
 import json
-import os
-from pathlib import Path
-from collections import defaultdict
-from datasets import load_dataset
-from tree_sitter import Language, Parser
-import tree_sitter_cpp as tscpp
-from transformers import RobertaTokenizer, RobertaModel
-from tqdm import tqdm
-import torch
-from pathlib import Path
 import numpy as np
+from pathlib import Path
+from rank_bm25 import BM25Okapi
+from typing import List, Dict
+import random
 
-# Initialize Tree-sitter and Tokenizer
-CPP_LANGUAGE = Language(tscpp.language())
-ts_parser = Parser(CPP_LANGUAGE)
-
-try:
-    token_dir = Path(__file__).parent.absolute()
-
-    # Navigate up to repo root, then to config
-    token_path = token_dir.parent.parent / 'GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model'
-    tokenizer = RobertaTokenizer.from_pretrained(token_path)
-except:
-    print("Warning: Could not load tokenizer. Using default RobertaTokenizer.")
-    tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
+from GraphCodeBert.CodeSearch.dataset_test import out_path
 
 
-def extract_dataflow_graph(code_bytes, tree):
-    """Extract data flow graph from code using tree-sitter."""
-    try:
-        root_node = tree.root_node
-        tokens = []
-        node_to_token_pos = {}
+class CodeSearchDataset:
+    def __init__(self, jsonl_path: str, seed: int = 42):
+        """
+        Initialize dataset with code-docstring pairs.
 
-        def get_tokens_recursive(node):
-            if not node.children:
-                tokens.append(node)
-                node_to_token_pos[node.id] = len(tokens) - 1
-            for child in node.children:
-                get_tokens_recursive(child)
+        Args:
+            jsonl_path: Path to the JSONL file with 'code' and 'positive' columns
+            seed: Random seed for reproducibility
+        """
+        self.seed = seed
+        random.seed(seed)
+        np.random.seed(seed)
 
-        get_tokens_recursive(root_node)
+        # Load data
+        self.records = self._load_jsonl(jsonl_path)
+        self.docstrings = [record['positive'] for record in self.records]
 
-        var_definitions = defaultdict(list)
-        var_uses = defaultdict(list)
+        # Build BM25 index for hard negatives
+        self.bm25 = self._build_bm25_index()
+        print(f"Loaded {len(self.records)} records")
+        print(f"Built BM25 index with {len(self.docstrings)} docstrings")
 
-        def is_definition(node):
-            parent = node.parent
-            if not parent:
-                return False
-            if parent.type in ['declaration', 'init_declarator', 'parameter_declaration']:
-                return True
-            if parent.type == 'assignment_expression' and node.id == parent.child_by_field_name('left').id:
-                return True
-            return False
+    def _load_jsonl(self, path: str) -> List[Dict]:
+        """Load JSONL file."""
+        records = []
+        with open(path, 'r') as f:
+            for line in f:
+                records.append(json.loads(line.strip()))
+        return records
 
-        queue = [root_node]
-        while queue:
-            node = queue.pop(0)
-            if node.type in ['identifier', 'field_identifier']:
-                var_name = code_bytes[node.start_byte:node.end_byte].decode('utf8', errors='ignore')
-                token_pos = node_to_token_pos.get(node.id)
-                if token_pos is not None:
-                    if is_definition(node):
-                        var_definitions[var_name].append(token_pos)
-                    else:
-                        var_uses[var_name].append(token_pos)
-            queue.extend(node.children)
+    def _build_bm25_index(self) -> BM25Okapi:
+        """Build BM25 index from docstrings for hard negative mining."""
+        # Tokenize docstrings
+        tokenized_docs = [doc.lower().split() for doc in self.docstrings]
+        bm25 = BM25Okapi(tokenized_docs)
+        return bm25
 
-        dfg_edges = []
-        for var_name, uses in var_uses.items():
-            defs = sorted(var_definitions.get(var_name, []))
-            for use_pos in uses:
-                preceding_defs = [d for d in defs if d < use_pos]
-                if preceding_defs:
-                    def_pos = preceding_defs[-1]
-                    dfg_edges.append([var_name, use_pos, "comesFrom", [var_name], [def_pos]])
+    def _get_bm25_hard_negative(self, positive_docstring: str, top_k: int = 10) -> str:
+        """
+        Get a hard negative using BM25 ranking.
+        Returns a docstring that's lexically similar but irrelevant.
 
-        return dfg_edges
-    except Exception as e:
-        return []
+        Args:
+            positive_docstring: The positive docstring to find negatives for
+            top_k: Number of top results to sample from
 
+        Returns:
+            A hard negative docstring
+        """
+        # Tokenize the query
+        query_tokens = positive_docstring.lower().split()
 
-def process_sample(sample):
-    """Process a single sample and extract DFG."""
-    try:
-        code = sample.get('code', '').strip()
-        docstring = sample.get('docstring', '').strip()
+        # Get top-k similar docstrings
+        scores = self.bm25.get_scores(query_tokens)
+        top_indices = np.argsort(-scores)[:top_k]
 
-        if not code or len(code) < 10:
-            return None
+        # Filter out the positive itself and randomly select from top-k
+        candidates = [i for i in top_indices if self.docstrings[i] != positive_docstring]
 
-        if not docstring or len(docstring) < 5:
-            return None
+        if not candidates:
+            # Fallback: random docstring if no candidates
+            candidates = list(range(len(self.docstrings)))
 
-        code_bytes = code.encode('utf8')
-        tree = ts_parser.parse(code_bytes)
+        selected_idx = random.choice(candidates)
+        return self.docstrings[selected_idx]
 
-        if tree.root_node.child_count == 0:
-            return None
+    def _get_random_negative(self, positive_docstring: str) -> str:
+        """Get a random negative docstring."""
+        while True:
+            idx = random.randint(0, len(self.docstrings) - 1)
+            if self.docstrings[idx] != positive_docstring:
+                return self.docstrings[idx]
 
-        dfg = extract_dataflow_graph(code_bytes, tree)
+    def create_training_data(self, output_path: str, hard_negative_ratio: float = 0.7):
+        """
+        Create training dataset with hard negatives.
 
-        return {
-            'code': code,
-            'docstring': docstring,
-            'dfg': dfg if dfg is not None else []
-        }
-    except Exception as e:
-        return None
+        Args:
+            output_path: Path to save the output JSONL file
+            hard_negative_ratio: Fraction of negatives to be hard negatives (BM25-based)
+        """
+        training_data = []
 
+        for i, record in enumerate(self.records):
+            code = record['code']
+            positive = record['positive']
 
-def preprocess_dataset(output_path, num_samples=None):
-    """Stream dataset, extract DFG, and save to JSONL."""
-    print(f"Loading streaming dataset from codeparrot/xlcost-text-to-code...")
-    try:
-        ds = load_dataset(
-            "codeparrot/xlcost-text-to-code",
-            "C++-program-level",
-            split="train",
-            streaming=True,
-            trust_remote_code=True
-        )
-    except Exception as e:
-        print(f"Failed to load with config: {str(e)}")
-        print("Trying without config...")
-        try:
-            ds = load_dataset(
-                "codeparrot/xlcost-text-to-code",
-                split="train",
-                streaming=True,
-                trust_remote_code=True
-            )
-        except Exception as e2:
-            print(f"Failed to load dataset: {str(e2)}")
-            print("\nTroubleshooting:")
-            print("1. Check your internet connection")
-            print("2. Try: huggingface-cli repo download codeparrot/xlcost-text-to-code --repo-type dataset")
-            print("3. Or manually download from: https://huggingface.co/datasets/codeparrot/xlcost-text-to-code")
-            raise
+            # Hard negative from BM25
+            if random.random() < hard_negative_ratio:
+                bad1 = self._get_bm25_hard_negative(positive, top_k=20)
+            else:
+                bad1 = self._get_random_negative(positive)
 
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+            # Second negative (mix of hard and random)
+            if random.random() < hard_negative_ratio:
+                bad2 = self._get_bm25_hard_negative(positive, top_k=20)
+            else:
+                bad2 = self._get_random_negative(positive)
 
-    processed_count = 0
-    skipped_count = 0
+            # Ensure negatives are different
+            while bad2 == bad1 or bad2 == positive:
+                bad2 = self._get_random_negative(positive)
 
-    print(f"Processing dataset and saving to {output_path}...")
+            training_record = {
+                'code': code,
+                'good_docstring': positive,
+                'bad1_docstring': bad1,
+                'bad2_docstring': bad2
+            }
+            training_data.append(training_record)
 
-    with open(output_path, 'w', encoding='utf-8') as f_out:
-        iterator = ds.iter(batch_size=1)
-        pbar = tqdm(iterator, desc="Processing samples")
+            if (i + 1) % 20 == 0:
+                print(f"Processed {i + 1}/{len(self.records)} records")
 
-        for idx, batch in enumerate(pbar):
-            if num_samples is not None and processed_count >= num_samples:
-                break
+        # Save to JSONL
+        with open(output_path, 'w') as f:
+            for record in training_data:
+                f.write(json.dumps(record) + '\n')
 
-            try:
-                if 'code' not in batch or 'text' not in batch:
-                    if skipped_count == 0:
-                        print(f"Available batch keys: {list(batch.keys())}")
-                    skipped_count += 1
-                    continue
+        print(f"Saved training data to {output_path}")
+        return training_data
 
-                code = batch['code']
-                text = batch['text']
+    def create_training_data_with_batch_negatives(self, output_path: str, batch_size: int = 32):
+        """
+        Create training dataset using in-batch negatives + BM25 hard negatives.
+        Simulates batch-based negative sampling.
 
-                if isinstance(code, (list, tuple)):
-                    code = code[0] if code else None
-                if isinstance(text, (list, tuple)):
-                    text = text[0] if text else None
+        Args:
+            output_path: Path to save the output JSONL file
+            batch_size: Simulated batch size for in-batch negatives
+        """
+        training_data = []
 
-                if code is None or text is None:
-                    skipped_count += 1
-                    continue
+        for i, record in enumerate(self.records):
+            code = record['code']
+            positive = record['positive']
 
-                sample = {'code': code, 'docstring': text}
-                processed_sample = process_sample(sample)
+            # Hard negative from BM25
+            bad1 = self._get_bm25_hard_negative(positive, top_k=10)
 
-                if processed_sample is not None:
-                    f_out.write(json.dumps(processed_sample, ensure_ascii=False) + '\n')
-                    processed_count += 1
-                    pbar.set_postfix({'processed': processed_count, 'skipped': skipped_count})
+            # Batch negative: sample from nearby records in the dataset
+            # This simulates what would happen in actual batching
+            if batch_size > 1:
+                batch_start = max(0, i - batch_size // 2)
+                batch_end = min(len(self.records), i + batch_size // 2)
+                batch_indices = [j for j in range(batch_start, batch_end) if j != i]
+
+                if batch_indices:
+                    batch_idx = random.choice(batch_indices)
+                    bad2 = self.records[batch_idx]['positive']
                 else:
-                    skipped_count += 1
+                    bad2 = self._get_random_negative(positive)
+            else:
+                bad2 = self._get_random_negative(positive)
 
-            except Exception as e:
-                skipped_count += 1
-                continue
+            # Ensure negatives are different
+            while bad2 == bad1 or bad2 == positive:
+                bad2 = self._get_random_negative(positive)
 
-    print(f"\n✓ Preprocessing complete!")
-    print(f"  Processed samples: {processed_count}")
-    print(f"  Skipped samples: {skipped_count}")
-    print(f"  Output saved to: {output_path}")
-    print(f"  Success rate: {100 * processed_count / (processed_count + skipped_count):.2f}%")
+            training_record = {
+                'code': code,
+                'good_docstring': positive,
+                'bad1_docstring': bad1,
+                'bad2_docstring': bad2
+            }
+            training_data.append(training_record)
 
-    return processed_count, skipped_count
+            if (i + 1) % 20 == 0:
+                print(f"Processed {i + 1}/{len(self.records)} records")
 
+        # Save to JSONL
+        with open(output_path, 'w') as f:
+            for record in training_data:
+                f.write(json.dumps(record) + '\n')
 
-def encode_corpus(model, tokenizer, collator, input_jsonl, output_jsonl, device, batch_size=32):
-    """
-    Pre-compute and cache encoded corpus vectors.
-
-    Args:
-        model: RoBERTa model for encoding
-        tokenizer: RoBERTa tokenizer
-        collator: CodeSearchCollator for processing
-        input_jsonl: Path to preprocessed dataset
-        output_jsonl: Path to save encoded corpus
-        device: torch device
-        batch_size: Encoding batch size
-    """
-    print(f"\nEncoding corpus from {input_jsonl}...")
-
-    # Load samples
-    samples = []
-    with open(input_jsonl, 'r', encoding='utf-8') as f:
-        for line in f:
-            if line.strip():
-                samples.append(json.loads(line))
-
-    print(f"Loaded {len(samples)} samples for encoding")
-
-    model.eval()
-
-    with open(output_jsonl, 'w', encoding='utf-8') as f_out:
-        with torch.no_grad():
-            for i in tqdm(range(0, len(samples), batch_size), desc="Encoding corpus"):
-                batch_samples = samples[i:i + batch_size]
-
-                # Process batch with collator
-                processed_codes = []
-                for sample in batch_samples:
-                    code = sample['code']
-                    dfg = sample['dfg']
-                    code_processed = collator._process_item(
-                        code, dfg, code, collator.max_code_len, is_code=True
-                    )
-                    processed_codes.append(code_processed)
-
-                # Stack batch
-                code_ids = torch.stack([c[0] for c in processed_codes]).to(device)
-                code_mask = torch.stack([c[1] for c in processed_codes]).to(device)
-                code_pos = torch.stack([c[2] for c in processed_codes]).to(device)
-
-                # Encode
-                code_vecs = model(
-                    input_ids=code_ids,
-                    attention_mask=code_mask,
-                    position_ids=code_pos
-                ).pooler_output
-
-                # Save with embeddings
-                for j, sample in enumerate(batch_samples):
-                    embedding = code_vecs[j].cpu().numpy().tolist()
-                    output_sample = {
-                        'code': sample['code'],
-                        'docstring': sample['docstring'],
-                        'dfg': sample['dfg'],
-                        'embedding': embedding
-                    }
-                    f_out.write(json.dumps(output_sample, ensure_ascii=False) + '\n')
-
-    print(f"✓ Corpus encoded and saved to {output_jsonl}")
+        print(f"Saved training data with batch negatives to {output_path}")
+        return training_data
 
 
-if __name__ == '__main__':
-    import json as cfg_json
+if __name__ == "__main__":
+    # Initialize dataset
+    script_dir = Path(__file__).parent.parent.absolute()
+    ds_path = script_dir / "data/first1000.jsonl"
+    dataset = CodeSearchDataset(ds_path)
 
-
-    # Get the directory where this script is located
-    script_dir = Path(__file__).parent.absolute()
-
-    # Navigate up to repo root, then to config
-    config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
-    try:
-        with open(config_path) as f:
-            config = cfg_json.load(f).get('codesearch')
-    except FileNotFoundError:
-        print(f"Config file not found at {config_path}")
-        print("Using default settings...")
-        config = {
-            'processed_data_file': './data/code_docstring_dataset.jsonl',
-            'encoded_corpus_file': './data/encoded_corpus.jsonl',
-            'num_samples': None
-        }
-    output_file = config.get('processed_data_file')
-    script_dir = Path(__file__).parent.absolute()
-
-    # Navigate up to repo root, then to config
-    output_file = script_dir.parent.parent / output_file
-
-
-    encoded_corpus_file = config.get('encoded_corpus_file', './data/encoded_corpus.jsonl')
-    script_dir = Path(__file__).parent.absolute()
-
-    # Navigate up to repo root, then to config
-    encoded_corpus_file = script_dir.parent.parent / encoded_corpus_file
-    num_samples = config.get('num_samples')
-
-    if not output_file:
-        raise ValueError("'processed_data_file' must be specified in config")
-
-    print(f"Config loaded:")
-    print(f"  Output file: {output_file}")
-    print(f"  Encoded corpus file: {encoded_corpus_file}")
-    print(f"  Num samples: {num_samples if num_samples else 'all available'}")
-    print()
-
-    # Step 1: Preprocess dataset
-    processed, skipped = preprocess_dataset(output_file, num_samples=num_samples)
-    print(f"\nDataset preprocessing finished!")
-
-    # Step 2: Encode corpus
-    print("\n" + "=" * 60)
-    print("Now encoding corpus for efficient retrieval...")
-    print("=" * 60)
-
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
-        print("Using Apple Silicon GPU (MPS)")
-    elif torch.cuda.is_available():
-        device = torch.device("cuda")
-        print("Using NVIDIA GPU (CUDA)")
-    else:
-        device = torch.device("cpu")
-        print("Using CPU")
-
-
-    from CodeSearch_train import CodeSearchCollator
-
-    model_path = config['mlm_model_path']
-    model_dir = Path(__file__).parent.absolute()
-
-    # Navigate up to repo root, then to config
-    mod_path = model_dir.parent.parent / model_path
-
-    tokenizer = RobertaTokenizer.from_pretrained(mod_path)
-    model = RobertaModel.from_pretrained(mod_path).to(device)
-    collator = CodeSearchCollator(tokenizer, config['max_code_len'], config['max_query_len'])
-
-    encode_corpus(
-        model, tokenizer, collator,
-        output_file, encoded_corpus_file,
-        device, batch_size=config.get('batch_size', 32)
+    out_path = script_dir / "data/training_data.jsonl"
+    # Option 1: Create dataset with hard negatives + random negatives (recommended)
+    print("\n=== Creating training data with hard negatives ===")
+    training_data = dataset.create_training_data(
+        out_path,
+        hard_negative_ratio=0.6
     )
 
-    print(f"\n✓ Complete! Ready for training and evaluation.")
+    # Option 2: Create dataset with batch negatives (alternative)
+    # print("\n=== Creating training data with batch negatives ===")
+    # training_data = dataset.create_training_data_with_batch_negatives(
+    #     'training_data_batch.jsonl',
+    #     batch_size=32
+    # )
+
+    # Print sample
+    print("\n=== Sample record ===")
+    sample = training_data[0]
+    print(f"Code:\n{sample['code'][:100]}...\n")
+    print(f"Good: {sample['good_docstring'][:80]}...")
+    print(f"Bad1: {sample['bad1_docstring'][:80]}...")
+    print(f"Bad2: {sample['bad2_docstring'][:80]}...")

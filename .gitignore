@@ -35,6 +35,9 @@ GraphCodeBert_CPP/idea
 DS_Store/
 .DS_Store/
 *.idea
+graphcodebert-cpp-codesearch/
+data/
+
 MANIFEST
 
 # PyInstaller

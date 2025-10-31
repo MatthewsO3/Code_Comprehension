@@ -1,6 +1,6 @@
 ################################################################################
 #                             OVERALL STATISTICS- EPYC5
-# 8 batch - 9 epoch - 256 len, 2-e5, 500 warmup -10k data
+# 8 batch - 8 epoch - 256 len, 2-e5, 500 warmup -10k data
 ################################################################################
   Snippets evaluated: 1000
   Total masked tokens: 14503
