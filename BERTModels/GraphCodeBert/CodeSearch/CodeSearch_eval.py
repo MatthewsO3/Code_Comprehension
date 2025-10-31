@@ -10,7 +10,7 @@ from model import Model
 from torch.utils.data import DataLoader, Dataset, SequentialSampler
 from transformers import AutoTokenizer, AutoModel, RobertaModel
 from tqdm import tqdm
-
+import pytrec_eval
 logger = logging.getLogger(__name__)
 
 
@@ -148,84 +148,112 @@ def collate_fn_docstring(batch):
     return (doc_ids, doc_mask, urls)
 
 
-def compute_metrics(scores, code_urls, doc_urls, top_k=1000):
+def compute_metrics(scores, query_urls, db_urls):
     """
-    Compute evaluation metrics: MRR, NDCG, Recall@K
-
+    Compute evaluation metrics using pytrec_eval.
     Args:
         scores: Similarity scores [num_queries, num_docs]
-        code_urls: URLs of code snippets (queries)
-        doc_urls: URLs of docstrings (database)
-        top_k: Top-k documents to evaluate
-
+        query_urls: URLs of queries
+        db_urls: URLs of database items
     Returns:
         Dictionary with metrics
     """
-    sort_ids = np.argsort(scores, axis=-1, kind='quicksort', order=None)[:, ::-1]
 
-    mrr_scores = []
-    recall_1 = 0
-    recall_5 = 0
-    recall_10 = 0
+    # 1. Create the 'qrel' (ground truth) dictionary
+    # qrel = {query_id: {doc_id: relevance_score}}
+    # We assume a 1-to-1 mapping: query_url_A matches doc_url_A
+    qrel = {}
+    query_url_set = set(query_urls)
+    db_url_to_idx = {url: i for i, url in enumerate(db_urls)}
 
-    for idx, (code_url, sort_id) in enumerate(zip(code_urls, sort_ids)):
-        rank = 0
-        found = False
+    for query_url in query_urls:
+        relevance_scores = {}
+        # The matching doc is the one with the same URL
+        if query_url in db_url_to_idx:
+            # Set relevance to 1 for the matching URL, 0 for all others
+            for db_url in db_urls:
+                relevance_scores[db_url] = 1 if db_url == query_url else 0
+        qrel[query_url] = relevance_scores
 
-        # Find rank of correct match
-        for i, doc_idx in enumerate(sort_id[:top_k]):
-            if doc_urls[doc_idx] == code_url:
-                rank = i + 1
-                found = True
-                break
+    # 2. Create the 'run' (model results) dictionary
+    # run = {query_id: {doc_id: model_score}}
+    run = {}
+    for i, query_url in enumerate(query_urls):
+        doc_scores = {}
+        for j, db_url in enumerate(db_urls):
+            doc_scores[db_url] = float(scores[i, j])
+        run[query_url] = doc_scores
 
-        if found:
-            mrr_scores.append(1.0 / rank)
-            if rank <= 1:
-                recall_1 += 1
-            if rank <= 5:
-                recall_5 += 1
-            if rank <= 10:
-                recall_10 += 1
-        else:
-            mrr_scores.append(0)
+    # 3. Set up and run the evaluator
+    evaluator = pytrec_eval.RelevanceEvaluator(
+        qrel,
+        {'map', 'recip_rank', 'recall.1', 'recall.5', 'recall.10'}
+    )
+    results = evaluator.evaluate(run)
 
-    num_queries = len(code_urls)
-
+    # 4. Average the results for all queries
     metrics = {
-        'mrr': float(np.mean(mrr_scores)),
-        'recall@1': float(recall_1 / num_queries),
-        'recall@5': float(recall_5 / num_queries),
-        'recall@10': float(recall_10 / num_queries),
+        'mrr': 0.0,
+        'map': 0.0,
+        'recall@1': 0.0,
+        'recall@5': 0.0,
+        'recall@10': 0.0,
     }
+
+    num_queries = len(results)
+    if num_queries == 0:
+        return metrics
+
+    for query_id in results:
+        metrics['mrr'] += results[query_id]['recip_rank']
+        metrics['map'] += results[query_id]['map']
+        metrics['recall@1'] += results[query_id]['recall_1']
+        metrics['recall@5'] += results[query_id]['recall_5']
+        metrics['recall@10'] += results[query_id]['recall_10']
+
+    for key in metrics:
+        metrics[key] /= num_queries
 
     return metrics
 
-
 def evaluate(args, model, tokenizer):
-    """Evaluate the model on code search task."""
+    """Evaluate the model on code search task with distractors."""
 
-    # Load datasets
-    logger.info("Loading evaluation datasets...")
-    query_dataset = CodeSearchEvalDataset(tokenizer, args, args.eval_data_file)
-    code_dataset = CodeSearchEvalDataset(tokenizer, args, args.eval_data_file)  # Same as query for now
-    doc_dataset = DocstringDataset(tokenizer, args, args.eval_data_file)
+    # --- 1. Load Query Dataset (1,100 docstrings) ---
+    logger.info("Loading query dataset...")
+    query_dataset = DocstringDataset(tokenizer, args, args.eval_data_file)
 
+    # --- 2. Load Code Database (Ground Truth + Distractors) ---
+    logger.info("Loading ground truth code dataset...")
+    gt_code_dataset = CodeSearchEvalDataset(tokenizer, args, args.eval_data_file)
+
+    logger.info("Loading distractor code dataset...")
+    distractor_dataset = CodeSearchEvalDataset(tokenizer, args, args.distractor_data_file)
+
+    # Dataloader settings
     num_workers = 0 if str(args.device) == "mps" else 4
 
     query_dataloader = DataLoader(
         query_dataset,
         sampler=SequentialSampler(query_dataset),
         batch_size=args.eval_batch_size,
+        collate_fn=collate_fn_docstring,  # Use docstring collate
+        num_workers=num_workers
+    )
+
+    gt_code_dataloader = DataLoader(
+        gt_code_dataset,
+        sampler=SequentialSampler(gt_code_dataset),
+        batch_size=args.eval_batch_size,
         collate_fn=collate_fn_code,
         num_workers=num_workers
     )
 
-    doc_dataloader = DataLoader(
-        doc_dataset,
-        sampler=SequentialSampler(doc_dataset),
+    distractor_dataloader = DataLoader(
+        distractor_dataset,
+        sampler=SequentialSampler(distractor_dataset),
         batch_size=args.eval_batch_size,
-        collate_fn=collate_fn_docstring,
+        collate_fn=collate_fn_code,
         num_workers=num_workers
     )
 
@@ -233,36 +261,14 @@ def evaluate(args, model, tokenizer):
     if args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
 
-    logger.info(f"  Num queries = {len(query_dataset)}")
-    logger.info(f"  Num docs = {len(doc_dataset)}")
-    logger.info(f"  Batch size = {args.eval_batch_size}")
-
     model.eval()
 
-    # Get code embeddings
-    logger.info("\nEncoding code snippets...")
-    code_vecs = []
-    code_urls_list = []
-
-    with torch.no_grad():
-        for batch in tqdm(query_dataloader, desc="Code embeddings"):
-            code_ids = batch[0].to(args.device)
-            code_mask = batch[1].to(args.device)
-            urls = batch[2]
-
-            code_vec = model(code_inputs=code_ids, attention_mask=code_mask)
-            code_vecs.append(code_vec.cpu().numpy())
-            code_urls_list.extend(urls)
-
-    code_vecs = np.concatenate(code_vecs, axis=0)
-
-    # Get docstring embeddings
-    logger.info("Encoding docstrings...")
+    # --- 3. Get Docstring Embeddings (Queries) ---
+    logger.info("Encoding docstrings (queries)...")
     doc_vecs = []
     doc_urls_list = []
-
     with torch.no_grad():
-        for batch in tqdm(doc_dataloader, desc="Docstring embeddings"):
+        for batch in tqdm(query_dataloader, desc="Docstring Embeddings"):
             doc_ids = batch[0].to(args.device)
             doc_mask = batch[1].to(args.device)
             urls = batch[2]
@@ -271,15 +277,51 @@ def evaluate(args, model, tokenizer):
             doc_vecs.append(doc_vec.cpu().numpy())
             doc_urls_list.extend(urls)
 
-    doc_vecs = np.concatenate(doc_vecs, axis=0)
+    doc_vecs = np.concatenate(doc_vecs, axis=0)  # Shape: [1100, hidden_size]
 
-    # Compute similarity scores
+    # --- 4. Get Code Embeddings (Database) ---
+    logger.info("Encoding ground truth code snippets...")
+    code_vecs_gt = []
+    code_urls_gt = []
+    with torch.no_grad():
+        for batch in tqdm(gt_code_dataloader, desc="Ground Truth Code"):
+            code_ids = batch[0].to(args.device)
+            code_mask = batch[1].to(args.device)
+            urls = batch[2]
+
+            code_vec = model(code_inputs=code_ids, attention_mask=code_mask)
+            code_vecs_gt.append(code_vec.cpu().numpy())
+            code_urls_gt.extend(urls)
+
+    logger.info("Encoding distractor code snippets...")
+    code_vecs_distractor = []
+    code_urls_distractor = []
+    with torch.no_grad():
+        for batch in tqdm(distractor_dataloader, desc="Distractor Code"):
+            code_ids = batch[0].to(args.device)
+            code_mask = batch[1].to(args.device)
+            urls = batch[2]
+
+            code_vec = model(code_inputs=code_ids, attention_mask=code_mask)
+            code_vecs_distractor.append(code_vec.cpu().numpy())
+            code_urls_distractor.extend(urls)
+
+    # Combine GT and Distractors into one large database
+    code_vecs = np.concatenate((code_vecs_gt, code_vecs_distractor), axis=0)
+    code_urls_list = code_urls_gt + code_urls_distractor
+
+    logger.info(f"  Total queries = {len(doc_urls_list)}")
+    logger.info(f"  Total database size = {len(code_urls_list)}")
+    logger.info(f"  Batch size = {args.eval_batch_size}")
+
+    # --- 5. Compute Scores & Metrics ---
     logger.info("Computing similarity scores...")
-    scores = np.matmul(code_vecs, doc_vecs.T)
+    # This is Docstring-to-Code search
+    scores = np.matmul(doc_vecs, code_vecs.T)  # Shape: [1100, 51100]
 
-    # Compute metrics
     logger.info("Computing metrics...")
-    metrics = compute_metrics(scores, code_urls_list, doc_urls_list, top_k=1000)
+    # Use the doc_urls as queries and code_urls as the database
+    metrics = compute_metrics(scores, doc_urls_list, code_urls_list)
 
     model.train()
 
@@ -315,6 +357,8 @@ def main():
     # Evaluation parameters
     parser.add_argument("--eval_data_file", default=None, type=str,
                         help="Evaluation data file")
+    parser.add_argument("--distractor_data_file", default="data/distractors.jsonl", type=str,
+                        help="Distractor code snippets file (JSONL)")
     parser.add_argument("--model_path", default=None, type=str,
                         help="Path to trained model checkpoint")
     parser.add_argument("--output_file", default=None, type=str,
@@ -348,6 +392,7 @@ def main():
     eval_data_path = script_dir / (cli_args.eval_data_file or eval_config.get('eval_data_file'))
     output_file = cli_args.output_file or eval_config.get('output_file', 'eval_results.json')
 
+    distractor_data_path = script_dir / cli_args.distractor_data_file
     args.model_path = model_path
     args.eval_data_file = eval_data_path
     args.output_file = output_file
@@ -355,7 +400,7 @@ def main():
     args.code_length = cli_args.code_length or codesearch_config.get('code_length', 256)
     args.nl_length = cli_args.nl_length or codesearch_config.get('nl_length', 128)
     args.seed = cli_args.seed or codesearch_config.get('seed', 42)
-
+    args.distractor_data_file = distractor_data_path
     # Validate paths
     if not args.eval_data_file or not os.path.exists(args.eval_data_file):
         raise ValueError(f"Evaluation data file not found: {args.eval_data_file}")
