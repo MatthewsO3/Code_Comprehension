@@ -25,7 +25,7 @@ print(f"Creating distractor file at: {out_path}")
 # (2100 to 52100 = 50,000 records)
 with open(out_path, "w", encoding="utf-8") as fout:
     # We only need the code for distractors
-    for idx, record in enumerate(islice(ds, 2100, 9796)):
+    for idx, record in enumerate(islice(ds, 8650, 9797)):
         code_text = record.get("code", "")
 
         # We need a unique URL/ID for each distractor

@@ -34,9 +34,9 @@ def extract_items_from_text(text: str):
     return pieces
 script_dir = Path(__file__).parent.parent.absolute()
 
-out_path = script_dir / "data/eval.jsonl"
+out_path = script_dir / "data/first1000.jsonl"
 with open(out_path, "w", encoding="utf-8") as fout:
-    for record in islice(ds, 1000,2100):
+    for record in islice(ds, 7500):
         code_text = record.get("code", "")
         text = record.get("text", "")
         pieces = extract_items_from_text(text)
