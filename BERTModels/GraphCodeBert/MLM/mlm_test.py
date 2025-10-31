@@ -243,13 +243,14 @@ def main():
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
             config_from_file = json.load(f).get("evaluate", {})
-
+    
     parser.set_defaults(**config_from_file)
     args = parser.parse_args()
-
+    args.model_path = script_dir.parent.parent / args.model_path
+    print(args.model_path)
     if not args.model_path or not Path(args.model_path).exists():
         parser.error("A valid 'model_path' must be specified in config.json or via arguments.")
-
+        print(args.model_path)
     print("\n--- Running evaluation with configuration ---")
     for k, v in vars(args).items(): print(f"  {k}: {v}")
     print("-------------------------------------------\n")

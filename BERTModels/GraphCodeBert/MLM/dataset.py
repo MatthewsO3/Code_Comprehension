@@ -157,7 +157,7 @@ if __name__ == "__main__":
     data_file = data_dir / 'data' / 'cpp_functions.jsonl'
     parser.add_argument('--output_file', type=str, default=data_file,
                         help='Output JSONL file for processed data')
-    parser.add_argument('--max_samples', type=int, default=10,
+    parser.add_argument('--max_samples', type=int, default=None,
                         help='Maximum number of samples to process (None for all)')
     args = parser.parse_args()
     stream_and_process_dataset(args.output_file, args.max_samples)
