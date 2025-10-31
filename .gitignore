@@ -36,6 +36,9 @@ DS_Store/
 .DS_Store/
 myvenv/
 *.idea
+graphcodebert-cpp-codesearch/
+data/
+
 MANIFEST
 data/
 
