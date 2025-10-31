@@ -118,7 +118,7 @@ class CodeSearchDataset:
             }
             training_data.append(training_record)
 
-            if (i + 1) % 20 == 0:
+            if (i + 1) % 1000 == 0:
                 print(f"Processed {i + 1}/{len(self.records)} records")
 
         # Save to JSONL
