@@ -5,7 +5,6 @@ from rank_bm25 import BM25Okapi
 from typing import List, Dict
 import random
 
-from GraphCodeBert.CodeSearch.dataset_test import out_path
 
 
 class CodeSearchDataset:
