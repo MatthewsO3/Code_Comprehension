@@ -54,19 +54,20 @@ class CodeSearchEvalDataset(Dataset):
         example = self.examples[item]
 
         # Encode code
-        code_tokens = self.tokenizer.tokenize(example['code'])[:self.args.code_length - 2]
-        code_tokens = [self.tokenizer.cls_token] + code_tokens + [self.tokenizer.sep_token]
-        code_ids = self.tokenizer.convert_tokens_to_ids(code_tokens)
-        code_mask = [1] * len(code_ids)
+        encoded = self.tokenizer(
+            example['code'],
+            max_length=self.args.code_length,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt'
+        )
 
-        # Pad code
-        padding_length = self.args.code_length - len(code_ids)
-        code_ids += [self.tokenizer.pad_token_id] * padding_length
-        code_mask += [0] * padding_length
+        code_ids = encoded['input_ids'].squeeze(0)
+        code_mask = encoded['attention_mask'].squeeze(0)
 
         return (
-            torch.tensor(code_ids),
-            torch.tensor(code_mask),
+            code_ids,
+            code_mask,
             self.urls[item]
         )
 
@@ -103,27 +104,30 @@ class DocstringDataset(Dataset):
     def __getitem__(self, item):
         """
         Returns:
-            code_ids: Tokenized code
-            code_mask: Attention mask for code
+            docstring_ids: Tokenized docstring
+            docstring_mask: Attention mask for docstring
             url: URL or identifier for the example
         """
         example = self.examples[item]
 
-        # Encode code
+        # Handle both possible docstring keys
+        doc_key = 'positive' if 'positive' in example else 'good_docstring'
+
+        # Encode docstring
         encoded = self.tokenizer(
-            example['code'],
-            max_length=self.args.code_length,
+            example[doc_key],
+            max_length=self.args.nl_length,  # <--- FIX
             padding='max_length',
             truncation=True,
             return_tensors='pt'
         )
 
-        code_ids = encoded['input_ids'].squeeze(0)
-        code_mask = encoded['attention_mask'].squeeze(0)
+        doc_ids = encoded['input_ids'].squeeze(0)
+        doc_mask = encoded['attention_mask'].squeeze(0)
 
         return (
-            code_ids,
-            code_mask,
+            doc_ids,
+            doc_mask,
             self.urls[item]
         )
 
