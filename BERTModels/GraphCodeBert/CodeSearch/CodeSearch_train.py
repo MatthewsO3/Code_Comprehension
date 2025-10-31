@@ -74,12 +74,11 @@ class CodeSearchDataset(Dataset):
         def encode(text, max_len):
             encoded = self.tokenizer(
                 text,
-                max_length=max_len,       # Truncate to max_len
-                padding='max_length',     # Pad to max_len
+                max_length=max_len,
+                padding='max_length',
                 truncation=True,
-                return_tensors='pt'       # Return PyTorch tensors
+                return_tensors='pt'
             )
-            # Squeeze(0) removes the batch dimension (tokenizer adds it)
             return encoded['input_ids'].squeeze(0), encoded['attention_mask'].squeeze(0)
 
         # Encode all four items
@@ -98,6 +97,7 @@ class CodeSearchDataset(Dataset):
             bad2_ids,
             bad2_mask,
         )
+
 
 def collate_fn(batch):
     """Custom collate function for batching."""
@@ -279,6 +279,10 @@ def main():
     args.neg_weight = cli_args.neg_weight or codesearch_config.get('neg_weight', 0.5)
     args.seed = cli_args.seed or codesearch_config.get('seed', 42)
 
+    # NEW: Anti-overfitting parameters from config
+    args.early_stopping_patience = codesearch_config.get('early_stopping_patience', 3)
+    args.early_stopping_delta = codesearch_config.get('early_stopping_delta', 0.001)
+
     # Validate required parameters
     if not args.train_data_file:
         raise ValueError("train_data_file must be specified in config or via CLI")
@@ -352,12 +356,15 @@ def main():
         num_workers=num_workers
     )
 
-    # Get optimizer and scheduler
+    # Get optimizer and scheduler with warmup
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, eps=1e-8)
+    total_steps = len(train_dataloader) * args.num_train_epochs
+    warmup_steps = int(0.1 * total_steps)  # 10% warmup
+
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
-        num_warmup_steps=0,
-        num_training_steps=len(train_dataloader) * args.num_train_epochs
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_steps
     )
 
     # Multi-GPU training
@@ -369,9 +376,11 @@ def main():
     logger.info(f"  Num examples = {len(train_dataset)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
     logger.info(f"  Total train batch size = {args.train_batch_size}")
-    logger.info(f"  Total optimization steps = {len(train_dataloader) * args.num_train_epochs}")
+    logger.info(f"  Total optimization steps = {total_steps}")
+    logger.info(f"  Warmup steps = {warmup_steps}")
 
     best_loss = float('inf')
+    patience_counter = 0
 
     for epoch in range(args.num_train_epochs):
         print(f"\n{'=' * 60}")
@@ -385,9 +394,11 @@ def main():
         print(f"  CE Loss:    {train_ce:.4f}")
         print(f"  Neg Loss:   {train_neg:.4f}")
 
-        # Save best model
-        if train_loss < best_loss:
+        # Early stopping logic
+        if train_loss < best_loss - args.early_stopping_delta:
             best_loss = train_loss
+            patience_counter = 0
+
             checkpoint_path = Path(args.output_dir) / "best_model"
             print(f"\nNew best model! Saving to {checkpoint_path}")
 
@@ -395,20 +406,21 @@ def main():
                 os.makedirs(checkpoint_path)
 
             model_to_save = model.module if hasattr(model, 'module') else model
-
-            # Save model state dict
             model_to_save.encoder.save_pretrained(checkpoint_path)
-
-            # Save the tokenizer
             tokenizer.save_pretrained(checkpoint_path)
 
             logger.info(f"Saved best model with loss: {best_loss:.4f}")
+        else:
+            patience_counter += 1
+            print(f"\nNo improvement. Patience: {patience_counter}/{args.early_stopping_patience}")
 
+            if patience_counter >= args.early_stopping_patience:
+                logger.info(f"Early stopping triggered after {epoch + 1} epochs")
+                break
 
     print(f"\n{'=' * 60}")
     print(f"Training completed!")
     print(f"Best loss: {best_loss:.4f}")
-    print(f"Model saved to: {checkpoint_path}")
     print(f"{'=' * 60}\n")
 
 
