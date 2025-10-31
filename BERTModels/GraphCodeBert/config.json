@@ -59,7 +59,9 @@
     "seed": 42,
     "evaluation": {
       "eval_data_file": "data/eval.jsonl",
-      "output_file": "data/eval_results.json"
+      "output_file": "data/eval_results.json",
+      "distractor_data_file": "data/distractors.jsonl",
+      "eval_batch_size": 32
     }
   }
 }
