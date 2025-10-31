@@ -34,11 +34,13 @@ GraphCodeBert_CPP/idea
 *.DS_Store
 DS_Store/
 .DS_Store/
+myvenv/
 *.idea
 graphcodebert-cpp-codesearch/
 data/
 
 MANIFEST
+data/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -157,7 +159,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
+myenv/
 # Spyder project settings
 .spyderproject
 .spyproject
