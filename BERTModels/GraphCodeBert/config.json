@@ -61,7 +61,7 @@
     "seed": 42,
     "evaluation": {
       "eval_data_file": "BERTModels/GraphCodeBert/data/eval.jsonl",
-      "distractor_data_file": "BERTModels/GraphCodeBert/data/distractors.jsonl",
+     "distractor_data_file": "BERTModels/GraphCodeBert/data/distractors.jsonl",
       "output_file": "eval_results.json",
       "eval_batch_size": 32
     }
