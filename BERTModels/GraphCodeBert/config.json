@@ -2,7 +2,7 @@
 {
   "train": {
     "data_file": "GraphCodeBert/data/cpp_functions.jsonl",
-    "output_dir": "BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config",
+    "output_dir": "GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config",
     "batch_size": 8,
     "epochs": 8,
     "learning_rate": 2e-5,
@@ -12,7 +12,7 @@
     "validation_split": 0.15
   },
    "evaluate": {
-       "model_path":"GraphCodeBert/MLM/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
+       "model_path":"GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config/best_model",
     "mask_ratio": 0.2,
     "top_k": 5,
     "use_database_snippets": true,
@@ -20,7 +20,7 @@
     "num_database_snippets": 1000
   },
   "mlm_eval": {
-    "model_path": "GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
+    "model_path": "GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config/best_model",
     "device": null,
     "mask_ratio": 0.2,
     "top_k": 5,
@@ -40,12 +40,12 @@
   },
   "codesearch": {
     "train_data_file": "data/training_data.jsonl",
-    "output_dir": "BERTModels/GraphCodeBert/graphcodebert-cpp-codesearch",
-    "model_name_or_path": "MLM/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
-    "tokenizer_name":  "MLM/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
-    "config_name":  "MLM/BERTModels/GraphCodeBert/graphcodebert-cpp-mlm-from-config/best_model",
+    "output_dir": "Models/graphcodebert-cpp-codesearch",
+    "model_name_or_path": "Models/graphcodebert-cpp-mlm-from-config/best_model",
+    "tokenizer_name":  "Models/graphcodebert-cpp-mlm-from-config/best_model",
+    "config_name":  "Models/graphcodebert-cpp-mlm-from-config/best_model",
     "model_type": "pretrained_checkpoint",
-    "train_batch_size": 16,
+    "train_batch_size": 1,
     "eval_batch_size": 16,
     "learning_rate": 2e-5,
     "max_grad_norm": 1.0,

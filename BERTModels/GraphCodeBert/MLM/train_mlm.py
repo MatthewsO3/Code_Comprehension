@@ -349,7 +349,8 @@ def main():
         device = torch.device("cpu")
         print("Using CPU")
 
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    output_path = script_dir.parent.parent / args.output_dir
+    Path(output_path).mkdir(parents=True, exist_ok=True)
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
     model = GraphCodeBERTWithEdgePrediction("microsoft/graphcodebert-base").to(device)
     data_dir = Path(__file__).parent.absolute()
