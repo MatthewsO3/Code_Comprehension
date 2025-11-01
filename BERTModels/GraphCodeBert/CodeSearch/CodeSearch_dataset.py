@@ -4,7 +4,9 @@ from pathlib import Path
 from rank_bm25 import BM25Okapi
 from typing import List, Dict
 import random
-
+from datasets import load_dataset
+import re
+from itertools import islice
 
 
 class CodeSearchDataset:
@@ -185,32 +187,151 @@ class CodeSearchDataset:
         print(f"Saved training data with batch negatives to {output_path}")
         return training_data
 
+    @staticmethod
+    def extract_items_from_text(text: str):
+        """Extract docstring items from raw text."""
+        parts = text.split("|", 1)
+        after = parts[1] if len(parts) > 1 else parts[0]
+
+        pieces = [p.strip() for p in after.split(";") if p.strip()]
+
+        # drop leading "C ++ Program to implement..." (case-insensitive)
+        if pieces:
+            pieces.pop(0)
+
+        # truncate at the first occurrence of "Driver code" (case-insensitive),
+        # removing it and everything after
+        for i, p in enumerate(pieces):
+            if re.search(r'(?i)driver\s*code', p):
+                pieces = pieces[:i]
+                break
+
+        return pieces
+
+    @staticmethod
+    def create_dataset_from_source(
+        output_path: str,
+        num_records: int = 7500,
+        start_idx: int = 0,
+        dataset_name: str = "codeparrot/xlcost-text-to-code",
+        config: str = "C++-program-level"
+    ):
+        """
+        Create a dataset JSONL file from the HuggingFace dataset source.
+
+        Args:
+            output_path: Path to save the output JSONL file
+            num_records: Number of records to extract
+            start_idx: Starting index in the dataset
+            dataset_name: Name of the HuggingFace dataset
+            config: Configuration of the dataset
+        """
+        print(f"Loading dataset {dataset_name} with config {config}...")
+        ds = load_dataset(
+            dataset_name,
+            config,
+            split="train",
+            streaming=True,
+            trust_remote_code=True
+        )
+
+        with open(output_path, "w", encoding="utf-8") as fout:
+            for record in islice(ds, start_idx, start_idx + num_records):
+                code_text = record.get("code", "")
+                text = record.get("text", "")
+                pieces = CodeSearchDataset.extract_items_from_text(text)
+                positive = " ; ".join(pieces)
+                fout.write(json.dumps({"code": code_text, "positive": positive}, ensure_ascii=False) + "\n")
+
+        print(f"Created dataset with {num_records} records at {output_path}")
+
+    @staticmethod
+    def create_distractors(
+        output_path: str,
+        num_distractors: int = 1147,
+        start_idx: int = 8650,
+        dataset_name: str = "codeparrot/xlcost-text-to-code",
+        config: str = "C++-program-level"
+    ):
+        """
+        Create a distractors JSONL file for evaluation.
+
+        Args:
+            output_path: Path to save the output JSONL file
+            num_distractors: Number of distractors to create
+            start_idx: Starting index in the dataset (should not overlap with training/eval sets)
+            dataset_name: Name of the HuggingFace dataset
+            config: Configuration of the dataset
+        """
+        print(f"Loading dataset {dataset_name} with config {config}...")
+        ds = load_dataset(
+            dataset_name,
+            config,
+            split="train",
+            streaming=True,
+            trust_remote_code=True
+        )
+
+        print(f"Creating distractor file at: {output_path}")
+        with open(output_path, "w", encoding="utf-8") as fout:
+            for idx, record in enumerate(islice(ds, start_idx, start_idx + num_distractors)):
+                code_text = record.get("code", "")
+                distractor_url = f"distractor_{idx}"
+                fout.write(json.dumps({"code": code_text, "url": distractor_url}, ensure_ascii=False) + "\n")
+
+                if (idx + 1) % 1000 == 0:
+                    print(f"Processed {idx + 1} distractors...")
+
+        print(f"Finished creating {output_path} with {num_distractors} distractors.")
+
 
 if __name__ == "__main__":
-    # Initialize dataset
     script_dir = Path(__file__).parent.parent.absolute()
-    ds_path = script_dir / "data/first1000.jsonl"
-    dataset = CodeSearchDataset(ds_path)
+    data_dir = script_dir / "data"
+    data_dir.mkdir(exist_ok=True)
 
-    out_path = script_dir / "data/training_data.jsonl"
-    # Option 1: Create dataset with hard negatives + random negatives (recommended)
+    # Step 1: Create dataset from source (replaces dataset_test.py)
+    print("\n=== Creating dataset from source ===")
+    ds_path = data_dir / "eval.jsonl"
+    CodeSearchDataset.create_dataset_from_source(
+        str(ds_path),
+        num_records=1150,
+        start_idx=7500
+    )
+
+    # Step 2: Initialize dataset for training
+    print("\n=== Initializing dataset ===")
+    dataset = CodeSearchDataset(str(ds_path))
+
+    # Step 3: Create training data with hard negatives
     print("\n=== Creating training data with hard negatives ===")
+    out_path = data_dir / "training_data.jsonl"
     training_data = dataset.create_training_data(
-        out_path,
+        str(out_path),
         hard_negative_ratio=0.6
     )
 
-    # Option 2: Create dataset with batch negatives (alternative)
-    # print("\n=== Creating training data with batch negatives ===")
-    # training_data = dataset.create_training_data_with_batch_negatives(
-    #     'training_data_batch.jsonl',
-    #     batch_size=32
-    # )
+    # Step 4: Create distractors (replaces create_distractors.py)
+    print("\n=== Creating distractors ===")
+    distractors_path = data_dir / "distractors.jsonl"
+    CodeSearchDataset.create_distractors(
+        str(distractors_path),
+        num_distractors=1147,
+        start_idx=8650
+    )
 
-    # Print sample
-    print("\n=== Sample record ===")
+    # Step 5: Print sample
+    print("\n=== Sample training record ===")
     sample = training_data[0]
     print(f"Code:\n{sample['code'][:100]}...\n")
     print(f"Good: {sample['good_docstring'][:80]}...")
     print(f"Bad1: {sample['bad1_docstring'][:80]}...")
     print(f"Bad2: {sample['bad2_docstring'][:80]}...")
+
+    # Optional: Create dataset with batch negatives
+    # print("\n=== Creating training data with batch negatives ===")
+    # batch_out_path = data_dir / "training_data_batch.jsonl"
+    # training_data_batch = dataset.create_training_data_with_batch_negatives(
+    #     str(batch_out_path),
+    #     batch_size=32
+    # )
