@@ -144,6 +144,8 @@ def stream_and_process_dataset(output_file: str, max_samples: int = None):
                 f.write(json.dumps(processed, ensure_ascii=False) + '\n')
                 processed_count += 1
                 pbar.update(1)
+            if processed_count % 5000 == 0 and processed_count > 0:
+                print(f"\nProcessed {processed_count} samples so far...")
 
     print(f"\n{'=' * 50}\nProcessing complete!")
     print(f"Total samples processed and saved: {processed_count}")
