@@ -1,3 +1,36 @@
+Loaded 116093 samples.
+
+--- Training Configuration ---
+  data_file: GraphCodeBert/data/cpp_functions.jsonl
+  output_dir: GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config
+  batch_size: 32
+  epochs: 8
+  learning_rate: 2e-05
+  max_length: 256
+  warmup_steps: 500
+  mlm_probability: 0.15
+  validation_split: 0.15
+------------------------------
+==================== Epoch 8/8 ====================
+Training: 100%|██████████████████████████████████████████████████████████████████████| 3084/3084 [43:26<00:00,  1.18it/s, loss=0.521, mlm=0.467, edge=0.0546]
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████| 545/545 [02:33<00:00,  3.56it/s]
+Train - Total: 0.4870, MLM: 0.4207, Edge: 0.0664
+Val   - Total: 0.4468, MLM: 0.3959, Edge: 0.0509
+
+=============== Training complete! Best val loss: 0.4461 ===============
+################################################################################
+#                             OVERALL STATISTICS                             #
+################################################################################
+  Snippets evaluated: 10000
+  Total masked tokens: 145069
+--------------------------------------------------------------------------------
+  Overall Top-1 Accuracy: 84.49% (122562/145069)
+  Overall Top-5 Accuracy: 92.05% (133536/145069)
+  Overall Perplexity:     6.7484
+################################################################################
+
+
+
 ################################################################################
 #                             OVERALL STATISTICS- EPYC5
 # 8 batch - 8 epoch - 256 len, 2-e5, 500 warmup -10k data

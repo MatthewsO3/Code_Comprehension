@@ -250,7 +250,6 @@ def main():
     print(args.model_path)
     if not args.model_path or not Path(args.model_path).exists():
         parser.error("A valid 'model_path' must be specified in config.json or via arguments.")
-        print(args.model_path)
     print("\n--- Running evaluation with configuration ---")
     for k, v in vars(args).items(): print(f"  {k}: {v}")
     print("-------------------------------------------\n")

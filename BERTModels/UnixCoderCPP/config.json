@@ -15,7 +15,7 @@
     "mask_ratio": 0.2,
     "top_k": 5,
     "use_database_snippets": true,
-    "training_data_size": 10000,
+    "training_data_size": 116093,
     "num_database_snippets": 1000
   }
 }
