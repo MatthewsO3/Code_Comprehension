@@ -1,5 +1,26 @@
+Loading tokenizer from unixcoder-cpp-mlm/best_model...
+Fetching 1000 test snippets from 'codeparrot/github-code-clean', skipping the first 116093...
+Applying filter: Snippets must have FEWER THAN 100 tokens.
+'(ReadTimeoutError("HTTPSConnectionPool(host='cas-bridge.xethub.hf.co', port=443): Read timed out. (read timeout=10)"), '(Request ID: f0553387-78be-4722-8ff3-a1226354f0e5)')' thrown while requesting GET https://huggingface.co/datasets/codeparrot/github-code-clean/resolve/c48d40f9e70f0196f8236901ee35807f7d6c44c0/data/train-00010-of-00880.parquet
+Retrying in 1s [Retry 1/5].
+Successfully fetched 1000 snippets for evaluation.
+Using device: cuda
+Loading model from unixcoder-cpp-mlm/best_model...
+Model loaded successfully!
 ################################################################################
-#                             OVERALL STATISTICS                             #
+#                             OVERALL STATISTICS  - 116k data                  #
+################################################################################
+  Snippets evaluated: 1000
+  Total masked tokens: 14136
+--------------------------------------------------------------------------------
+  Overall Top-1 Accuracy: 83.91% (11861/14136)
+  Overall Top-5 Accuracy: 92.28% (13044/14136)
+  Overall Perplexity:     6.6103
+################################################################################
+
+
+################################################################################
+#                             OVERALL STATISTICS    -   10k data               #
 ################################################################################
   Snippets evaluated: 1000
   Total masked tokens: 14227
