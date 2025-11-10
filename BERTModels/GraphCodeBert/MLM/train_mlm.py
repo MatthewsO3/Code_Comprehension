@@ -294,12 +294,10 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=None)
     parser.add_argument('--mlm_probability', type=float, default=None)
     parser.add_argument('--validation_split', type=float, default=None)
-
-    config = {}
-    config_dir = Path(__file__).parent.parent.absolute()
-    config_path = config_dir / 'config.json'
+    script_dir = Path(__file__).parent.absolute()
+    config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
     if os.path.exists(config_path):
-        with open('../config.json', 'r') as f:
+        with open(config_path, 'r') as f:
             config = json.load(f).get("train", {})
     parser.set_defaults(**config)
     args = parser.parse_args()
