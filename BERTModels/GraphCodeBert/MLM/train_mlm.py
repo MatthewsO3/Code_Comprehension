@@ -1,6 +1,6 @@
 """
-OPTIMIZED: Train GraphCodeBERT on MLM + Edge Prediction tasks with DFG for C++ code.
-16GB GPU optimized version
+Train GraphCodeBERT on MLM + Edge Prediction tasks with DFG for C++ code.
+Implements the dual-objective pre-training from GraphCodeBERT paper.
 """
 import os
 import json
@@ -16,8 +16,6 @@ from transformers import RobertaForMaskedLM, RobertaTokenizer, get_linear_schedu
 from torch.optim import AdamW
 from tqdm import tqdm
 from collections import defaultdict
-import time
-import gc
 
 
 """
@@ -27,9 +25,7 @@ def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.cuda.empty_cache()
+    if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
 set_seed(42)
 
 
@@ -108,7 +104,7 @@ class GraphCodeBERTDataset(Dataset):
             'input_ids': torch.tensor(input_ids),
             'attention_mask': torch.tensor(attn_mask),
             'position_idx': torch.tensor(position_idx),
-            'dfg_info': {
+            'dfg_info': {  # NEW - needed for edge prediction
                 'nodes': dfg_nodes,
                 'edges': [(i, j) for i, adjs in adj.items() for j in adjs]
             }
@@ -116,6 +112,9 @@ class GraphCodeBERTDataset(Dataset):
 
 """
 GraphCodeBERT with MLM and Edge Prediction heads
+Uses GraphCodeBERT as base and adds edge prediction module
+Forward method computes both MLM and edge prediction losses
+Saves both base model and edge classifier
 """
 class GraphCodeBERTWithEdgePrediction(nn.Module):
     def __init__(self, base_model_name: str = "microsoft/graphcodebert-base"):
@@ -143,6 +142,7 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
             hidden_states = mlm_outputs.hidden_states[-1]
             batch_size, seq_len, hidden_size = hidden_states.shape
 
+            # Gather node representations
             node1_repr = hidden_states[edge_batch_idx, edge_node1_pos]
             node2_repr = hidden_states[edge_batch_idx, edge_node2_pos]
             edge_repr = torch.cat([node1_repr, node2_repr], dim=-1)
@@ -163,6 +163,12 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
         torch.save(self.edge_classifier.state_dict(), f"{save_directory}/edge_classifier.pt")
 
 
+
+"""
+Data collator for MLM and Edge Prediction
+Applies MLM masking and prepares edge prediction samples
+Prepares batch tensors for model input
+"""
 @dataclass
 class MLMWithEdgePredictionCollator:
     tokenizer: RobertaTokenizer
@@ -239,6 +245,12 @@ class MLMWithEdgePredictionCollator:
         }
 
 
+"""
+Training and validation loops
+Batch-wise training with optimizer and scheduler steps
+Logs losses for MLM and edge prediction
+Returns average losses per epoch
+"""
 def train_epoch(model, dataloader, optimizer, scheduler, device):
     model.train()
     total_loss = total_mlm = total_edge = 0
@@ -270,6 +282,11 @@ def train_epoch(model, dataloader, optimizer, scheduler, device):
     return total_loss / len(dataloader), total_mlm / len(dataloader), total_edge / len(dataloader)
 
 
+"""
+Validation loop
+Evaluates model on validation set without gradient updates
+Calculates and returns average losses
+"""
 def validate(model, dataloader, device):
     model.eval()
     total_loss = total_mlm = total_edge = 0
@@ -291,6 +308,13 @@ def validate(model, dataloader, device):
     return total_loss / len(dataloader), total_mlm / len(dataloader), total_edge / len(dataloader)
 
 
+"""
+Read configuration for training from config.json if available
+Sets device based on availability (MPS, CUDA, CPU)
+Initializes tokenizer, model, datasets, dataloaders, optimizer, and scheduler
+Runs training loop for specified epochs, saving best model based on validation loss
+Prints training configuration and progress
+"""
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Train GraphCodeBERT with Edge Prediction')
@@ -306,6 +330,7 @@ def main():
 
     script_dir = Path(__file__).parent.absolute()
 
+    # Navigate up to repo root, then to config
     config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
@@ -314,7 +339,6 @@ def main():
     args = parser.parse_args()
     if not args.data_file: parser.error("data_file must be specified.")
 
-    # DEVICE DETECTION
     if torch.backends.mps.is_available():
         device = torch.device("mps")
         print("Using Apple Silicon GPU (MPS)")
@@ -325,16 +349,13 @@ def main():
         device = torch.device("cpu")
         print("Using CPU")
 
-    # MEMORY CLEANUP
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    output_path = script_dir.parent.parent / args.output_dir
+    Path(output_path).mkdir(parents=True, exist_ok=True)
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
     model = GraphCodeBERTWithEdgePrediction("microsoft/graphcodebert-base").to(device)
     data_dir = Path(__file__).parent.absolute()
 
+    # Navigate up to repo root, then to config
     data_path = data_dir.parent.parent / args.data_file
     full_dataset = GraphCodeBERTDataset(data_path, tokenizer, args.max_length)
     val_size = int(args.validation_split * len(full_dataset))
@@ -342,28 +363,11 @@ def main():
         full_dataset, [len(full_dataset) - val_size, val_size]
     )
 
-    # OPTIMIZED NUM_WORKERS FOR 16GB GPU
-    num_workers = 4  # Explicit setting for 16GB GPU
-    pin_memory = torch.cuda.is_available()  # Only pin if GPU available
-
     collator = MLMWithEdgePredictionCollator(tokenizer, mlm_probability=args.mlm_probability)
-    train_dl = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        collate_fn=collator,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        prefetch_factor=2
-    )
-    val_dl = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        collate_fn=collator,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        prefetch_factor=2
-    )
+    train_dl = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
+                         collate_fn=collator, num_workers=min(4, os.cpu_count() or 1))
+    val_dl = DataLoader(val_dataset, batch_size=args.batch_size,
+                       collate_fn=collator, num_workers=min(4, os.cpu_count() or 1))
 
     optimizer = AdamW(model.parameters(), lr=args.learning_rate)
     scheduler = get_linear_schedule_with_warmup(
@@ -373,25 +377,15 @@ def main():
 
     print("\n--- Training Configuration ---")
     for k, v in vars(args).items(): print(f"  {k}: {v}")
-    print(f"  num_workers: {num_workers}")
-    print(f"  pin_memory: {pin_memory}")
     print("------------------------------\n")
 
     best_val_loss = float('inf')
     for epoch in range(args.epochs):
         print(f"\n{'=' * 20} Epoch {epoch + 1}/{args.epochs} {'=' * 20}")
-
-        # TIMING
-        epoch_start = time.time()
         train_loss, train_mlm, train_edge = train_epoch(model, train_dl, optimizer, scheduler, device)
-        train_time = time.time() - epoch_start
-
-        val_start = time.time()
         val_loss, val_mlm, val_edge = validate(model, val_dl, device)
-        val_time = time.time() - val_start
-
-        print(f"Train - Total: {train_loss:.4f}, MLM: {train_mlm:.4f}, Edge: {train_edge:.4f} | Time: {train_time/60:.2f}m")
-        print(f"Val   - Total: {val_loss:.4f}, MLM: {val_mlm:.4f}, Edge: {val_edge:.4f} | Time: {val_time/60:.2f}m")
+        print(f"Train - Total: {train_loss:.4f}, MLM: {train_mlm:.4f}, Edge: {train_edge:.4f}")
+        print(f"Val   - Total: {val_loss:.4f}, MLM: {val_mlm:.4f}, Edge: {val_edge:.4f}")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -399,11 +393,6 @@ def main():
             print(f"New best model! Saving to {checkpoint_path}")
             model.save_pretrained(checkpoint_path)
             tokenizer.save_pretrained(checkpoint_path)
-
-        # Memory cleanup
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
     print(f"\n{'=' * 15} Training complete! Best val loss: {best_val_loss:.4f} {'=' * 15}")
 
