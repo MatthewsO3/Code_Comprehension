@@ -18,16 +18,21 @@ from tqdm import tqdm
 from collections import defaultdict
 
 
+"""
+Set random seeds for reproducibility
+"""
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
-
-
 set_seed(42)
 
 
+"""
+Custom Dataset for GraphCodeBERT with DFG processing
+Converts code tokens and DFG into model inputs
+"""
 class GraphCodeBERTDataset(Dataset):
     def __init__(self, jsonl_file: str, tokenizer, max_length=512):
         self.tokenizer = tokenizer
@@ -105,9 +110,13 @@ class GraphCodeBERTDataset(Dataset):
             }
         }
 
-
+"""
+GraphCodeBERT with MLM and Edge Prediction heads
+Uses GraphCodeBERT as base and adds edge prediction module
+Forward method computes both MLM and edge prediction losses
+Saves both base model and edge classifier
+"""
 class GraphCodeBERTWithEdgePrediction(nn.Module):
-    """GraphCodeBERT with MLM and Edge Prediction heads"""
     def __init__(self, base_model_name: str = "microsoft/graphcodebert-base"):
         super().__init__()
         self.roberta_mlm = RobertaForMaskedLM.from_pretrained(base_model_name)
@@ -154,6 +163,12 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
         torch.save(self.edge_classifier.state_dict(), f"{save_directory}/edge_classifier.pt")
 
 
+
+"""
+Data collator for MLM and Edge Prediction
+Applies MLM masking and prepares edge prediction samples
+Prepares batch tensors for model input
+"""
 @dataclass
 class MLMWithEdgePredictionCollator:
     tokenizer: RobertaTokenizer
@@ -230,6 +245,12 @@ class MLMWithEdgePredictionCollator:
         }
 
 
+"""
+Training and validation loops
+Batch-wise training with optimizer and scheduler steps
+Logs losses for MLM and edge prediction
+Returns average losses per epoch
+"""
 def train_epoch(model, dataloader, optimizer, scheduler, device):
     model.train()
     total_loss = total_mlm = total_edge = 0
@@ -261,6 +282,11 @@ def train_epoch(model, dataloader, optimizer, scheduler, device):
     return total_loss / len(dataloader), total_mlm / len(dataloader), total_edge / len(dataloader)
 
 
+"""
+Validation loop
+Evaluates model on validation set without gradient updates
+Calculates and returns average losses
+"""
 def validate(model, dataloader, device):
     model.eval()
     total_loss = total_mlm = total_edge = 0
@@ -282,6 +308,13 @@ def validate(model, dataloader, device):
     return total_loss / len(dataloader), total_mlm / len(dataloader), total_edge / len(dataloader)
 
 
+"""
+Read configuration for training from config.json if available
+Sets device based on availability (MPS, CUDA, CPU)
+Initializes tokenizer, model, datasets, dataloaders, optimizer, and scheduler
+Runs training loop for specified epochs, saving best model based on validation loss
+Prints training configuration and progress
+"""
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Train GraphCodeBERT with Edge Prediction')
@@ -295,9 +328,12 @@ def main():
     parser.add_argument('--mlm_probability', type=float, default=None)
     parser.add_argument('--validation_split', type=float, default=None)
 
-    config = {}
-    if os.path.exists('config.json'):
-        with open('config.json', 'r') as f:
+    script_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
+    config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
             config = json.load(f).get("train", {})
     parser.set_defaults(**config)
     args = parser.parse_args()
@@ -316,8 +352,11 @@ def main():
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
     model = GraphCodeBERTWithEdgePrediction("microsoft/graphcodebert-base").to(device)
+    data_dir = Path(__file__).parent.absolute()
 
-    full_dataset = GraphCodeBERTDataset(args.data_file, tokenizer, args.max_length)
+    # Navigate up to repo root, then to config
+    data_path = data_dir.parent.parent / args.data_file
+    full_dataset = GraphCodeBERTDataset(data_path, tokenizer, args.max_length)
     val_size = int(args.validation_split * len(full_dataset))
     train_dataset, val_dataset = torch.utils.data.random_split(
         full_dataset, [len(full_dataset) - val_size, val_size]
