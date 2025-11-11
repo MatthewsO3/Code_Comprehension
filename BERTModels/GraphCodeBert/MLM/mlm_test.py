@@ -169,7 +169,7 @@ class MLMEvaluator:
         }
 
     def evaluate_snippet(self, code: str, mask_ratio: float, top_k: int) -> Dict:
-        print("\n" + "="*80 + "\nORIGINAL CODE:\n" + "-"*80 + f"\n{code.strip()}")
+        #print("\n" + "="*80 + "\nORIGINAL CODE:\n" + "-"*80 + f"\n{code.strip()}")
         code_tokens = self.tokenizer.tokenize(code, add_prefix_space=True)
         if not code_tokens: return None
 
@@ -178,20 +178,20 @@ class MLMEvaluator:
         orig_tokens = [code_tokens[i] for i in mask_pos]
         masked_tokens = code_tokens.copy()
         for pos in mask_pos: masked_tokens[pos] = self.tokenizer.mask_token
-        print("\n" + "="*80 + "\nMASKED CODE:\n" + "-"*80 + f"\n{self.tokenizer.convert_tokens_to_string(masked_tokens)}")
+        #print("\n" + "="*80 + "\nMASKED CODE:\n" + "-"*80 + f"\n{self.tokenizer.convert_tokens_to_string(masked_tokens)}")
 
         inputs = self.preprocess_for_graphcodebert(code, masked_tokens)
         with torch.no_grad():
             logits = self.model(**{k: v.to(self.device) for k, v in inputs.items()}).logits
 
-        print("\n" + "="*80 + "\nPREDICTIONS:\n" + "-"*80)
+        #print("\n" + "="*80 + "\nPREDICTIONS:\n" + "-"*80)
         top1_correct, top5_correct, log_probs = 0, 0, []
         for i, pos in enumerate(mask_pos):
             probs = torch.softmax(logits[0, pos + 1], dim=-1)
             top_probs, top_indices = torch.topk(probs, top_k)
 
             orig_token = orig_tokens[i]
-            print(f"\nPosition {pos} (original: '{orig_token}'):")
+            #print(f"\nPosition {pos} (original: '{orig_token}'):")
 
             top_preds = self.tokenizer.convert_ids_to_tokens(top_indices)
 
@@ -206,7 +206,7 @@ class MLMEvaluator:
                         found_top5 = True
                     if rank == 1:
                         top1_correct += 1
-                print(f"    {rank}. {marker} '{pred}' (prob: {prob:.4f})")
+                #print(f"    {rank}. {marker} '{pred}' (prob: {prob:.4f})")
 
             log_probs.append(np.log(correct_token_prob))
 
@@ -240,6 +240,7 @@ def main():
 
     # Navigate up to repo root, then to config
     config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
+    print(config_path)
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
             config_from_file = json.load(f).get("evaluate", {})
