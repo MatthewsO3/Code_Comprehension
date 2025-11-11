@@ -2,6 +2,7 @@
 Train UniXcoder on MLM task for C++ code.
 Based on the UniXcoder paper - uses unified architecture with mask attention.
 Supports config.json for settings.
+Includes AST (Abstract Syntax Tree) extraction using tree-sitter.
 """
 import os
 import json
@@ -16,6 +17,16 @@ from transformers import RobertaForMaskedLM, RobertaTokenizer, get_linear_schedu
 from torch.optim import AdamW
 from tqdm import tqdm
 
+try:
+    from tree_sitter import Language, Parser
+    import tree_sitter_cpp as tscpp
+    TS_AVAILABLE = True
+    CPP_LANGUAGE = Language(tscpp.language())
+    ts_parser = Parser(CPP_LANGUAGE)
+except ImportError:
+    TS_AVAILABLE = False
+    print("Warning: tree_sitter not available. AST extraction will fail.")
+
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -28,10 +39,38 @@ def set_seed(seed=42):
 set_seed(42)
 
 
+# ============================================================================
+# AST Extraction
+# ============================================================================
+
+def extract_ast_sequence(tree) -> List[str]:
+    """
+    Extract AST node sequence from tree-sitter parse tree.
+    Performs DFS traversal and collects node types.
+    """
+    if not TS_AVAILABLE:
+        return []
+
+    ast_nodes = []
+
+    def traverse(node):
+        ast_nodes.append(node.type)
+        for child in node.children:
+            traverse(child)
+
+    traverse(tree.root_node)
+    return ast_nodes
+
+
+# ============================================================================
+# Dataset
+# ============================================================================
+
 class UniXcoderDataset(Dataset):
     """
     Dataset for UniXcoder MLM training.
     Unlike GraphCodeBERT, UniXcoder doesn't require DFG preprocessing.
+    Includes AST extraction using tree-sitter.
     """
     def __init__(self, jsonl_file: str, tokenizer, max_length=512):
         self.tokenizer = tokenizer
@@ -57,8 +96,10 @@ class UniXcoderDataset(Dataset):
         """
         Convert code to input features for UniXcoder.
         UniXcoder uses simpler preprocessing than GraphCodeBERT.
+        Includes AST from sample if available.
         """
         code_tokens = sample['code_tokens']
+        ast = sample.get('ast', [])
 
         # Truncate if too long
         if len(code_tokens) > self.max_length - 2:  # -2 for CLS and SEP
@@ -82,7 +123,8 @@ class UniXcoderDataset(Dataset):
 
         return {
             'input_ids': torch.tensor(input_ids),
-            'attention_mask': torch.tensor(attention_mask)
+            'attention_mask': torch.tensor(attention_mask),
+            'ast': ast  # Include AST for potential future use
         }
 
 
@@ -98,6 +140,9 @@ class MLMCollator:
     def __call__(self, examples: List[Dict]) -> Dict[str, torch.Tensor]:
         input_ids = torch.stack([ex['input_ids'] for ex in examples])
         attention_mask = torch.stack([ex['attention_mask'] for ex in examples])
+
+        # Note: AST is not used in this collator, but can be extracted for logging/analysis
+        # ast_sequences = [ex.get('ast', []) for ex in examples]
 
         # Prepare labels and masked input
         labels = input_ids.clone()
