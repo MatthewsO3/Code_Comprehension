@@ -1,6 +1,7 @@
 """
 Train GraphCodeBERT on MLM + Edge Prediction tasks with DFG for C++ code.
 Implements the dual-objective pre-training from GraphCodeBERT paper.
+WITH COMPREHENSIVE LOSS AND PERFORMANCE TRACKING
 """
 import os
 import json
@@ -18,16 +19,142 @@ from tqdm import tqdm
 from collections import defaultdict
 
 
+"""
+Set random seeds for reproducibility
+"""
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
-
-
 set_seed(42)
 
 
+class PerformanceTracker:
+    """Tracks and saves all performance metrics during training."""
+    def __init__(self, output_dir: str):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.history = {
+            'epoch': [],
+            'train_total_loss': [],
+            'train_mlm_loss': [],
+            'train_edge_loss': [],
+            'train_batch_losses': [],  # All batch losses
+            'train_mlm_batch_losses': [],
+            'train_edge_batch_losses': [],
+            'val_total_loss': [],
+            'val_mlm_loss': [],
+            'val_edge_loss': [],
+            'val_batch_losses': [],  # All batch losses
+            'val_mlm_batch_losses': [],
+            'val_edge_batch_losses': [],
+            'learning_rate': [],
+            'best_val_loss': None,
+            'best_epoch': None,
+        }
+
+    def log_batch(self, phase: str, total_loss, mlm_loss, edge_loss):
+        """Log individual batch metrics."""
+        if phase == 'train':
+            self.history['train_batch_losses'].append(total_loss)
+            self.history['train_mlm_batch_losses'].append(mlm_loss if mlm_loss else 0)
+            self.history['train_edge_batch_losses'].append(edge_loss if edge_loss else 0)
+        else:
+            self.history['val_batch_losses'].append(total_loss)
+            self.history['val_mlm_batch_losses'].append(mlm_loss if mlm_loss else 0)
+            self.history['val_edge_batch_losses'].append(edge_loss if edge_loss else 0)
+
+    def log_epoch(self, epoch: int, phase: str, total_loss, mlm_loss, edge_loss, lr=None):
+        """Log epoch-level metrics."""
+        if phase == 'train':
+            self.history['epoch'].append(epoch)
+            self.history['train_total_loss'].append(total_loss)
+            self.history['train_mlm_loss'].append(mlm_loss)
+            self.history['train_edge_loss'].append(edge_loss)
+            if lr is not None:
+                self.history['learning_rate'].append(lr)
+        else:
+            self.history['val_total_loss'].append(total_loss)
+            self.history['val_mlm_loss'].append(mlm_loss)
+            self.history['val_edge_loss'].append(edge_loss)
+
+    def update_best(self, val_loss, epoch):
+        """Update best validation loss."""
+        if self.history['best_val_loss'] is None or val_loss < self.history['best_val_loss']:
+            self.history['best_val_loss'] = val_loss
+            self.history['best_epoch'] = epoch
+            return True
+        return False
+
+    def save(self):
+        """Save all metrics to JSON files."""
+        # Save detailed history
+        history_path = self.output_dir / 'training_history.json'
+        with open(history_path, 'w') as f:
+            json.dump(self.history, f, indent=2)
+        print(f"✓ Saved training history to {history_path}")
+
+        # Save summary statistics
+        summary = self._compute_summary()
+        summary_path = self.output_dir / 'training_summary.json'
+        with open(summary_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        print(f"✓ Saved training summary to {summary_path}")
+
+        # Save CSV for easy plotting
+        self._save_csv()
+
+    def _compute_summary(self) -> Dict:
+        """Compute summary statistics."""
+        return {
+            'total_epochs': len(self.history['epoch']),
+            'best_epoch': self.history['best_epoch'],
+            'best_val_loss': self.history['best_val_loss'],
+            'final_train_loss': self.history['train_total_loss'][-1] if self.history['train_total_loss'] else None,
+            'final_val_loss': self.history['val_total_loss'][-1] if self.history['val_total_loss'] else None,
+            'min_train_loss': min(self.history['train_total_loss']) if self.history['train_total_loss'] else None,
+            'min_val_loss': min(self.history['val_total_loss']) if self.history['val_total_loss'] else None,
+            'final_train_mlm_loss': self.history['train_mlm_loss'][-1] if self.history['train_mlm_loss'] else None,
+            'final_train_edge_loss': self.history['train_edge_loss'][-1] if self.history['train_edge_loss'] else None,
+            'final_val_mlm_loss': self.history['val_mlm_loss'][-1] if self.history['val_mlm_loss'] else None,
+            'final_val_edge_loss': self.history['val_edge_loss'][-1] if self.history['val_edge_loss'] else None,
+            'total_batches_train': len(self.history['train_batch_losses']),
+            'total_batches_val': len(self.history['val_batch_losses']),
+        }
+
+    def _save_csv(self):
+        """Save epoch-level metrics as CSV."""
+        try:
+            import csv
+            csv_path = self.output_dir / 'training_metrics.csv'
+            with open(csv_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    'Epoch', 'Train Total Loss', 'Train MLM Loss', 'Train Edge Loss',
+                    'Val Total Loss', 'Val MLM Loss', 'Val Edge Loss', 'Learning Rate'
+                ])
+                for i in range(len(self.history['epoch'])):
+                    writer.writerow([
+                        self.history['epoch'][i],
+                        self.history['train_total_loss'][i],
+                        self.history['train_mlm_loss'][i],
+                        self.history['train_edge_loss'][i],
+                        self.history['val_total_loss'][i] if i < len(self.history['val_total_loss']) else '',
+                        self.history['val_mlm_loss'][i] if i < len(self.history['val_mlm_loss']) else '',
+                        self.history['val_edge_loss'][i] if i < len(self.history['val_edge_loss']) else '',
+                        self.history['learning_rate'][i] if i < len(self.history['learning_rate']) else '',
+                    ])
+            print(f"✓ Saved metrics CSV to {csv_path}")
+        except Exception as e:
+            print(f"⚠️ Could not save CSV: {e}")
+
+
+"""
+Custom Dataset for GraphCodeBERT with DFG processing
+Converts code tokens and DFG into model inputs
+"""
 class GraphCodeBERTDataset(Dataset):
     def __init__(self, jsonl_file: str, tokenizer, max_length=512):
         self.tokenizer = tokenizer
@@ -105,9 +232,13 @@ class GraphCodeBERTDataset(Dataset):
             }
         }
 
-
+"""
+GraphCodeBERT with MLM and Edge Prediction heads
+Uses GraphCodeBERT as base and adds edge prediction module
+Forward method computes both MLM and edge prediction losses
+Saves both base model and edge classifier
+"""
 class GraphCodeBERTWithEdgePrediction(nn.Module):
-    """GraphCodeBERT with MLM and Edge Prediction heads"""
     def __init__(self, base_model_name: str = "microsoft/graphcodebert-base"):
         super().__init__()
         self.roberta_mlm = RobertaForMaskedLM.from_pretrained(base_model_name)
@@ -154,6 +285,12 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
         torch.save(self.edge_classifier.state_dict(), f"{save_directory}/edge_classifier.pt")
 
 
+
+"""
+Data collator for MLM and Edge Prediction
+Applies MLM masking and prepares edge prediction samples
+Prepares batch tensors for model input
+"""
 @dataclass
 class MLMWithEdgePredictionCollator:
     tokenizer: RobertaTokenizer
@@ -230,10 +367,18 @@ class MLMWithEdgePredictionCollator:
         }
 
 
-def train_epoch(model, dataloader, optimizer, scheduler, device):
+"""
+Training and validation loops with loss tracking
+Batch-wise training with optimizer and scheduler steps
+Logs losses for MLM and edge prediction
+Returns average losses per epoch and tracks all batch losses
+"""
+def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: PerformanceTracker):
     model.train()
     total_loss = total_mlm = total_edge = 0
+    batch_count = 0
     progress_bar = tqdm(dataloader, desc="Training")
+
     for batch in progress_bar:
         optimizer.zero_grad()
         loss, mlm_loss, edge_loss = model(
@@ -250,20 +395,36 @@ def train_epoch(model, dataloader, optimizer, scheduler, device):
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         scheduler.step()
+
         total_loss += loss.item()
         if mlm_loss: total_mlm += mlm_loss.item()
         if edge_loss: total_edge += edge_loss.item()
+        batch_count += 1
+
+        # Log batch metrics
+        tracker.log_batch('train', loss.item(),
+                         mlm_loss.item() if mlm_loss else None,
+                         edge_loss.item() if edge_loss else None)
+
         progress_bar.set_postfix({
             'loss': loss.item(),
             'mlm': mlm_loss.item() if mlm_loss else 0,
             'edge': edge_loss.item() if edge_loss else 0
         })
-    return total_loss / len(dataloader), total_mlm / len(dataloader), total_edge / len(dataloader)
+
+    return (total_loss / batch_count, total_mlm / batch_count, total_edge / batch_count)
 
 
-def validate(model, dataloader, device):
+"""
+Validation loop with loss tracking
+Evaluates model on validation set without gradient updates
+Calculates and returns average losses
+"""
+def validate(model, dataloader, device, tracker: PerformanceTracker):
     model.eval()
     total_loss = total_mlm = total_edge = 0
+    batch_count = 0
+
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Validation"):
             loss, mlm_loss, edge_loss = model(
@@ -279,9 +440,24 @@ def validate(model, dataloader, device):
             total_loss += loss.item()
             if mlm_loss: total_mlm += mlm_loss.item()
             if edge_loss: total_edge += edge_loss.item()
-    return total_loss / len(dataloader), total_mlm / len(dataloader), total_edge / len(dataloader)
+            batch_count += 1
+
+            # Log batch metrics
+            tracker.log_batch('val', loss.item(),
+                             mlm_loss.item() if mlm_loss else None,
+                             edge_loss.item() if edge_loss else None)
+
+    return (total_loss / batch_count, total_mlm / batch_count, total_edge / batch_count)
 
 
+"""
+Read configuration for training from config.json if available
+Sets device based on availability (MPS, CUDA, CPU)
+Initializes tokenizer, model, datasets, dataloaders, optimizer, and scheduler
+Runs training loop for specified epochs, saving best model based on validation loss
+Prints training configuration and progress
+SAVES ALL LOSSES AND PERFORMANCE METRICS TO JSON, CSV, AND SUMMARY
+"""
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Train GraphCodeBERT with Edge Prediction')
@@ -294,7 +470,10 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=None)
     parser.add_argument('--mlm_probability', type=float, default=None)
     parser.add_argument('--validation_split', type=float, default=None)
+
     script_dir = Path(__file__).parent.absolute()
+
+    # Navigate up to repo root, then to config
     config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
@@ -313,11 +492,19 @@ def main():
         device = torch.device("cpu")
         print("Using CPU")
 
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    output_path = script_dir.parent.parent / args.output_dir
+    Path(output_path).mkdir(parents=True, exist_ok=True)
+
+    # Initialize performance tracker
+    tracker = PerformanceTracker(str(output_path))
+
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
     model = GraphCodeBERTWithEdgePrediction("microsoft/graphcodebert-base").to(device)
+    data_dir = Path(__file__).parent.absolute()
 
-    full_dataset = GraphCodeBERTDataset(args.data_file, tokenizer, args.max_length)
+    # Navigate up to repo root, then to config
+    data_path = data_dir.parent.parent / args.data_file
+    full_dataset = GraphCodeBERTDataset(data_path, tokenizer, args.max_length)
     val_size = int(args.validation_split * len(full_dataset))
     train_dataset, val_dataset = torch.utils.data.random_split(
         full_dataset, [len(full_dataset) - val_size, val_size]
@@ -342,12 +529,22 @@ def main():
     best_val_loss = float('inf')
     for epoch in range(args.epochs):
         print(f"\n{'=' * 20} Epoch {epoch + 1}/{args.epochs} {'=' * 20}")
-        train_loss, train_mlm, train_edge = train_epoch(model, train_dl, optimizer, scheduler, device)
-        val_loss, val_mlm, val_edge = validate(model, val_dl, device)
+
+        train_loss, train_mlm, train_edge = train_epoch(model, train_dl, optimizer, scheduler, device, tracker)
+        val_loss, val_mlm, val_edge = validate(model, val_dl, device, tracker)
+
+        # Get current learning rate
+        current_lr = optimizer.param_groups[0]['lr']
+
+        # Log epoch metrics
+        tracker.log_epoch(epoch, 'train', train_loss, train_mlm, train_edge, current_lr)
+        tracker.log_epoch(epoch, 'val', val_loss, val_mlm, val_edge)
+
         print(f"Train - Total: {train_loss:.4f}, MLM: {train_mlm:.4f}, Edge: {train_edge:.4f}")
         print(f"Val   - Total: {val_loss:.4f}, MLM: {val_mlm:.4f}, Edge: {val_edge:.4f}")
+        print(f"Learning Rate: {current_lr:.2e}")
 
-        if val_loss < best_val_loss:
+        if tracker.update_best(val_loss, epoch):
             best_val_loss = val_loss
             checkpoint_path = Path(args.output_dir) / "best_model"
             print(f"New best model! Saving to {checkpoint_path}")
@@ -355,6 +552,12 @@ def main():
             tokenizer.save_pretrained(checkpoint_path)
 
     print(f"\n{'=' * 15} Training complete! Best val loss: {best_val_loss:.4f} {'=' * 15}")
+
+    # Save all performance metrics
+    print("\n" + "="*50)
+    print("SAVING PERFORMANCE METRICS...")
+    print("="*50)
+    tracker.save()
 
 
 if __name__ == "__main__":
