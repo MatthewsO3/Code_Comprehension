@@ -4,14 +4,18 @@ import sys
 from pathlib import Path
 
 
-def run_command(script_name, description):
+def run_command(script_name, description, extra_args=None):
     """Run a Python script and handle errors."""
     print(f"\n{'=' * 70}")
     print(f"Running: {description}")
     print(f"{'=' * 70}\n")
 
     try:
-        result = subprocess.run([sys.executable, script_name], check=True)
+        cmd = [sys.executable, script_name]
+        if extra_args:
+            cmd.extend(extra_args)
+
+        result = subprocess.run(cmd, check=True)
         print(f"\n✓ {description} completed successfully!")
         return True
     except subprocess.CalledProcessError as e:
@@ -22,39 +26,62 @@ def run_command(script_name, description):
         return False
 
 
-def run_mlm_pipeline():
-    """Run the MLM pre-training pipeline."""
+def run_mlm_pipeline(max_samples=10):
+    """Run the MLM pre-training pipeline with optional sample limit."""
     print("\n" + "#" * 70)
     print("#" + " " * 20 + "MLM PRE-TRAINING PIPELINE" + " " * 22 + "#")
     print("#" * 70)
 
+    if max_samples:
+        print(f"# Max samples: {max_samples}")
+        print("#" * 70)
+
     script_dir = Path(__file__).parent.absolute()
 
-    steps = [
-        (str(script_dir / "MLM/dataset.py"), "Step 1: Extract DFG from C++ code"),
-        (str(script_dir / "MLM/train_mlm.py"), "Step 2: Train GraphCodeBERT with MLM + Edge Prediction"),
-        (str(script_dir / "MLM/mlm_evaluator.py"), "Step 3: Evaluate MLM model"),
-    ]
+    # Step 1: Extract DFG from C++ code
+    dataset_script = str(script_dir / "MLM/dataset.py")
+    dataset_args = []
+    if max_samples:
+        dataset_args = ["--max_samples", str(max_samples)]
 
-    failed_step = None
-    for script, description in steps:
-        if not Path(script).exists():
-            print(f"\n✗ Script not found: {script}")
-            failed_step = description
-            break
+    if not Path(dataset_script).exists():
+        print(f"\n✗ Script not found: {dataset_script}")
+        return False
 
-        if not run_command(script, description):
-            failed_step = description
-            break
+    if not run_command(dataset_script, "Step 1: Extract DFG from C++ code", dataset_args):
+        print("\n" + "#" * 70)
+        print("# MLM Pipeline FAILED at: Step 1 (Dataset extraction)")
+        print("#" * 70 + "\n")
+        return False
+
+    # Step 2: Train GraphCodeBERT with MLM + Edge Prediction
+    train_script = str(script_dir / "MLM/train_mlm.py")
+    if not Path(train_script).exists():
+        print(f"\n✗ Script not found: {train_script}")
+        return False
+
+    if not run_command(train_script, "Step 2: Train GraphCodeBERT with MLM + Edge Prediction"):
+        print("\n" + "#" * 70)
+        print("# MLM Pipeline FAILED at: Step 2 (Training)")
+        print("#" * 70 + "\n")
+        return False
+
+    # Step 3: Evaluate MLM model
+    eval_script = str(script_dir / "MLM/mlm_evaluator.py")
+    if not Path(eval_script).exists():
+        print(f"\n✗ Script not found: {eval_script}")
+        return False
+
+    if not run_command(eval_script, "Step 3: Evaluate MLM model"):
+        print("\n" + "#" * 70)
+        print("# MLM Pipeline FAILED at: Step 3 (Evaluation)")
+        print("#" * 70 + "\n")
+        return False
 
     print("\n" + "#" * 70)
-    if failed_step:
-        print(f"# MLM Pipeline FAILED at: {failed_step}")
-    else:
-        print("# MLM Pipeline COMPLETED successfully!")
+    print("# MLM Pipeline COMPLETED successfully!")
     print("#" * 70 + "\n")
-
-    return failed_step is None
+    return True
 
 
 def run_codesearch_pipeline():
@@ -98,8 +125,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python run.py --mlm              # Run MLM pre-training pipeline
-  python run.py --codesearch       # Run CodeSearch training pipeline
+  python run.py --mlm                    # Run MLM pre-training pipeline
+  python run.py --mlm --max_samples 1000 # Run MLM with 1000 samples
+  python run.py --codesearch             # Run CodeSearch training pipeline
         """
     )
 
@@ -115,6 +143,13 @@ Examples:
         help="Run CodeSearch training pipeline (CodeSearch_dataset.py → CodeSearch_train.py → CodeSearch_eval.py)"
     )
 
+    parser.add_argument(
+        "--max_samples",
+        type=int,
+        default=50000,
+        help="Maximum number of samples to process in MLM dataset extraction (default: None = all)"
+    )
+
     args = parser.parse_args()
 
     # Check that exactly one flag is provided
@@ -127,10 +162,14 @@ Examples:
         print("\n✗ Error: Please specify only one pipeline (--mlm or --codesearch)")
         sys.exit(1)
 
+    # Warn if max_samples is specified but not using MLM
+    if args.max_samples and not args.mlm:
+        print("\n⚠️  Warning: --max_samples is only used with --mlm flag")
+
     # Run the appropriate pipeline
     success = False
     if args.mlm:
-        success = run_mlm_pipeline()
+        success = run_mlm_pipeline(args.max_samples)
     elif args.codesearch:
         success = run_codesearch_pipeline()
 
