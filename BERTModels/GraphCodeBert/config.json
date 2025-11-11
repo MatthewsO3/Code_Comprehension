@@ -1,10 +1,10 @@
 
 {
   "train": {
-    "data_file": "/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/data/cpp_functions.jsonl",
+    "data_file": "GraphCodeBert/data/cpp_functions.jsonl",
     "output_dir": "GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config",
     "batch_size": 1,
-    "epochs": 8,
+    "epochs": 1,
     "learning_rate": 2e-5,
     "max_length": 256,
     "warmup_steps": 5,
@@ -16,8 +16,8 @@
     "mask_ratio": 0.2,
     "top_k": 5,
     "use_database_snippets": true,
-    "training_data_size": 100,
-    "num_database_snippets": 1
+    "training_data_size": 10000,
+    "num_database_snippets": 10000
   },
   "mlm_eval": {
     "model_path": "GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config/best_model",
