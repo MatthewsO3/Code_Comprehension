@@ -67,7 +67,7 @@ def run_mlm_pipeline(max_samples=10):
         return False
 
     # Step 3: Evaluate MLM model
-    eval_script = str(script_dir / "MLM/mlm_evaluator.py")
+    eval_script = str(script_dir / "MLM/mlm_test.py")
     if not Path(eval_script).exists():
         print(f"\n✗ Script not found: {eval_script}")
         return False

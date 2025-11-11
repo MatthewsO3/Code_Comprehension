@@ -1,6 +1,7 @@
 """
 Evaluate UniXcoder MLM model on C++ code snippets.
 Fetches test snippets from the codeparrot database and aggregates metrics.
+Includes AST (Abstract Syntax Tree) extraction using tree-sitter.
 """
 import torch
 import numpy as np
@@ -10,14 +11,64 @@ import json
 import argparse
 from pathlib import Path
 from typing import List, Dict
-
+from collections import defaultdict
 
 from transformers import RobertaTokenizer, RobertaForMaskedLM
 from datasets import load_dataset
 
+try:
+    from tree_sitter import Language, Parser
+    import tree_sitter_cpp as tscpp
+    TS_AVAILABLE = True
+    CPP_LANGUAGE = Language(tscpp.language())
+    ts_parser = Parser(CPP_LANGUAGE)
+except ImportError:
+    TS_AVAILABLE = False
+    print("Warning: tree_sitter not available. AST extraction will fail.")
+
 random.seed(42)
 torch.manual_seed(42)
 
+
+# ============================================================================
+# AST Extraction
+# ============================================================================
+
+def extract_ast_sequence(tree) -> List[str]:
+    """
+    Extract AST node sequence from tree-sitter parse tree.
+    Performs DFS traversal and collects node types.
+    """
+    if not TS_AVAILABLE:
+        return []
+
+    ast_nodes = []
+
+    def traverse(node):
+        ast_nodes.append(node.type)
+        for child in node.children:
+            traverse(child)
+
+    traverse(tree.root_node)
+    return ast_nodes
+
+
+def extract_ast_for_code(code: str) -> List[str]:
+    """Extract AST from code string."""
+    if not TS_AVAILABLE:
+        return []
+
+    try:
+        code_bytes = code.encode('utf8')
+        tree = ts_parser.parse(code_bytes)
+        return extract_ast_sequence(tree)
+    except Exception:
+        return []
+
+
+# ============================================================================
+# Filtering and Data Loading
+# ============================================================================
 
 def should_keep_code(code: str) -> bool:
     """Filter criteria for C++ code"""
@@ -33,8 +84,11 @@ def should_keep_code(code: str) -> bool:
     return True
 
 
-def fetch_test_snippets_from_db(skip_n: int, take_n: int, tokenizer: RobertaTokenizer) -> List[str]:
-    """Fetches valid C++ snippets from the database, skipping the training data."""
+def fetch_test_snippets_from_db(skip_n: int, take_n: int, tokenizer: RobertaTokenizer) -> List[Dict]:
+    """
+    Fetches valid C++ snippets from the database, skipping the training data.
+    Returns list of dicts with 'code' and 'ast' fields.
+    """
     print(f"Fetching {take_n} test snippets from 'codeparrot/github-code-clean', skipping the first {skip_n}...")
     print("Applying filter: Snippets must have FEWER THAN 100 tokens.")
 
@@ -45,13 +99,18 @@ def fetch_test_snippets_from_db(skip_n: int, take_n: int, tokenizer: RobertaToke
         filtered_dataset = (
             ex for ex in dataset.skip(skip_n)
             if should_keep_code(ex.get('code')) and
-               len(tokenizer.tokenize(ex.get('code'),add_prefix_space = True)) < 100
+               len(tokenizer.tokenize(ex.get('code'), add_prefix_space=True)) < 100
         )
 
         for example in filtered_dataset:
             if len(snippets) >= take_n:
                 break
-            snippets.append(example['code'])
+            code = example['code']
+            ast = extract_ast_for_code(code)
+            snippets.append({
+                'code': code,
+                'ast': ast
+            })
 
         if not snippets:
             print("\nWARNING: Could not fetch any valid snippets.")
@@ -65,8 +124,12 @@ def fetch_test_snippets_from_db(skip_n: int, take_n: int, tokenizer: RobertaToke
         return []
 
 
+# ============================================================================
+# UniXcoder Evaluator with AST
+# ============================================================================
+
 class UniXcoderMLMEvaluator:
-    """Evaluator for UniXcoder MLM task."""
+    """Evaluator for UniXcoder MLM task with AST support."""
 
     def __init__(self, model_path: str, tokenizer: RobertaTokenizer, device: str = None):
         self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
@@ -77,12 +140,13 @@ class UniXcoderMLMEvaluator:
         self.model = RobertaForMaskedLM.from_pretrained(model_path).to(self.device).eval()
         print("Model loaded successfully!")
 
-    def evaluate_snippet(self, code: str, mask_ratio: float, top_k: int) -> Dict:
+    def evaluate_snippet(self, code: str, ast: List[str], mask_ratio: float, top_k: int) -> Dict:
         """
         Evaluates a single snippet and returns raw numbers for aggregation.
+        AST is included for logging/analysis but not used in the model forward pass.
         """
         # Tokenize with add_prefix_space=True for consistency
-        code_tokens = self.tokenizer.tokenize(code,add_prefix_space = True)
+        code_tokens = self.tokenizer.tokenize(code, add_prefix_space=True)
         if not code_tokens:
             return None
 
@@ -128,7 +192,6 @@ class UniXcoderMLMEvaluator:
             logits = outputs.logits
 
         # Evaluate predictions
-        #print("PREDICTIONS:") # Simplified header
         top1_correct, top5_correct, log_probs = 0, 0, []
 
         for i, pos in enumerate(mask_positions):
@@ -140,8 +203,6 @@ class UniXcoderMLMEvaluator:
             top_probs, top_indices = torch.topk(probs, top_k)
 
             original_token = original_tokens[i]
-            #print(f"\nPosition {pos} (original: '{original_token}'):")
-
             top_predictions = self.tokenizer.convert_ids_to_tokens(top_indices)
 
             # Calculate metrics
@@ -149,16 +210,15 @@ class UniXcoderMLMEvaluator:
             found_top5 = False
 
             for rank, (pred, prob) in enumerate(zip(top_predictions, top_probs), 1):
-                marker = "✓" if pred == original_token else " "
-                if marker == "✓":
+                if pred == original_token:
                     correct_token_prob = prob.item()
                     if not found_top5:
                         top5_correct += 1
                         found_top5 = True
                     if rank == 1:
                         top1_correct += 1
+                    break
 
-               # print(f"    {rank}. {marker} '{pred}' (prob: {prob:.4f})")
 
             log_probs.append(np.log(correct_token_prob))
 
@@ -218,7 +278,7 @@ def main():
         )
     else:
         print("Using hardcoded C++ snippets for evaluation (fallback).")
-        snippets_to_evaluate = CPP_SNIPPETS_FALLBACK
+        snippets_to_evaluate = [{'code': s, 'ast': extract_ast_for_code(s)} for s in CPP_SNIPPETS_FALLBACK]
 
     if not snippets_to_evaluate:
         print("No snippets to evaluate. Exiting.")
@@ -235,9 +295,10 @@ def main():
         'all_log_probs': []
     }
 
-    for i, snippet in enumerate(snippets_to_evaluate, 1):
-       # print(f"\n\n{'#' * 35} SNIPPET {i}/{len(snippets_to_evaluate)} {'#' * 35}")
-        results = evaluator.evaluate_snippet(snippet, args.mask_ratio, args.top_k)
+    for i, snippet_data in enumerate(snippets_to_evaluate, 1):
+        code = snippet_data['code']
+        ast = snippet_data.get('ast', [])
+        results = evaluator.evaluate_snippet(code, ast, args.mask_ratio, args.top_k)
         if results:
             aggregated_results['total_top1_correct'] += results['top1_correct']
             aggregated_results['total_top5_correct'] += results['top5_correct']
