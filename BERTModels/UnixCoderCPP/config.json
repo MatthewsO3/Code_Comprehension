@@ -2,11 +2,11 @@
   "train": {
     "data_file": "data/unixcoder_cpp.jsonl",
     "output_dir": "unixcoder-cpp-mlm",
-    "batch_size": 2,
-    "epochs": 2,
+    "batch_size": 16,
+    "epochs": 5,
     "learning_rate": 2e-4,
     "max_length": 256,
-    "warmup_steps": 5,
+    "warmup_steps": 500,
     "mlm_probability": 0.15,
     "validation_split": 0.15
   },
