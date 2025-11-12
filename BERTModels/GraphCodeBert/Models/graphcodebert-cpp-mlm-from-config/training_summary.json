@@ -1,0 +1,15 @@
+{
+  "total_epochs": 8,
+  "best_epoch": 7,
+  "best_val_loss": 1.9390259385108948,
+  "final_train_loss": 2.340722755952315,
+  "final_val_loss": 1.9390259385108948,
+  "min_train_loss": 2.340722755952315,
+  "min_val_loss": 1.9390259385108948,
+  "final_train_mlm_loss": 1.852340362288735,
+  "final_train_edge_loss": 0.4883823936635798,
+  "final_val_mlm_loss": 1.4876712560653687,
+  "final_val_edge_loss": 0.4513546824455261,
+  "total_batches_train": 88,
+  "total_batches_val": 16
+}
