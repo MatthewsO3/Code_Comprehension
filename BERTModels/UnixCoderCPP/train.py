@@ -3,6 +3,7 @@ Train UniXcoder on MLM task for C++ code.
 Based on the UniXcoder paper - uses unified architecture with mask attention.
 Supports config.json for settings.
 Includes AST (Abstract Syntax Tree) extraction using tree-sitter.
+WITH COMPREHENSIVE LOSS AND PERFORMANCE TRACKING
 """
 import os
 import json
@@ -37,6 +38,104 @@ def set_seed(seed=42):
 
 
 set_seed(42)
+
+
+# ============================================================================
+# Performance Tracker
+# ============================================================================
+
+class PerformanceTracker:
+    """Tracks and saves all performance metrics during training."""
+    def __init__(self, output_dir: str):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.history = {
+            'epoch': [],
+            'train_loss': [],
+            'train_batch_losses': [],  # All batch losses
+            'val_loss': [],
+            'val_batch_losses': [],  # All batch losses
+            'learning_rate': [],
+            'best_val_loss': None,
+            'best_epoch': None,
+        }
+
+    def log_batch(self, phase: str, loss):
+        """Log individual batch metrics."""
+        if phase == 'train':
+            self.history['train_batch_losses'].append(loss)
+        else:
+            self.history['val_batch_losses'].append(loss)
+
+    def log_epoch(self, epoch: int, phase: str, loss, lr=None):
+        """Log epoch-level metrics."""
+        if phase == 'train':
+            self.history['epoch'].append(epoch)
+            self.history['train_loss'].append(loss)
+            if lr is not None:
+                self.history['learning_rate'].append(lr)
+        else:
+            self.history['val_loss'].append(loss)
+
+    def update_best(self, val_loss, epoch):
+        """Update best validation loss."""
+        if self.history['best_val_loss'] is None or val_loss < self.history['best_val_loss']:
+            self.history['best_val_loss'] = val_loss
+            self.history['best_epoch'] = epoch
+            return True
+        return False
+
+    def save(self):
+        """Save all metrics to JSON files."""
+        # Save detailed history
+        history_path = self.output_dir / 'training_history.json'
+        with open(history_path, 'w') as f:
+            json.dump(self.history, f, indent=2)
+        print(f"✓ Saved training history to {history_path}")
+
+        # Save summary statistics
+        summary = self._compute_summary()
+        summary_path = self.output_dir / 'training_summary.json'
+        with open(summary_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        print(f"✓ Saved training summary to {summary_path}")
+
+        # Save CSV for easy plotting
+        self._save_csv()
+
+    def _compute_summary(self) -> Dict:
+        """Compute summary statistics."""
+        return {
+            'total_epochs': len(self.history['epoch']),
+            'best_epoch': self.history['best_epoch'],
+            'best_val_loss': self.history['best_val_loss'],
+            'final_train_loss': self.history['train_loss'][-1] if self.history['train_loss'] else None,
+            'final_val_loss': self.history['val_loss'][-1] if self.history['val_loss'] else None,
+            'min_train_loss': min(self.history['train_loss']) if self.history['train_loss'] else None,
+            'min_val_loss': min(self.history['val_loss']) if self.history['val_loss'] else None,
+            'total_batches_train': len(self.history['train_batch_losses']),
+            'total_batches_val': len(self.history['val_batch_losses']),
+        }
+
+    def _save_csv(self):
+        """Save epoch-level metrics as CSV."""
+        try:
+            import csv
+            csv_path = self.output_dir / 'training_metrics.csv'
+            with open(csv_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Epoch', 'Train Loss', 'Val Loss', 'Learning Rate'])
+                for i in range(len(self.history['epoch'])):
+                    writer.writerow([
+                        self.history['epoch'][i],
+                        self.history['train_loss'][i],
+                        self.history['val_loss'][i] if i < len(self.history['val_loss']) else '',
+                        self.history['learning_rate'][i] if i < len(self.history['learning_rate']) else '',
+                    ])
+            print(f"✓ Saved metrics CSV to {csv_path}")
+        except Exception as e:
+            print(f"⚠️ Could not save CSV: {e}")
 
 
 # ============================================================================
@@ -141,9 +240,6 @@ class MLMCollator:
         input_ids = torch.stack([ex['input_ids'] for ex in examples])
         attention_mask = torch.stack([ex['attention_mask'] for ex in examples])
 
-        # Note: AST is not used in this collator, but can be extracted for logging/analysis
-        # ast_sequences = [ex.get('ast', []) for ex in examples]
-
         # Prepare labels and masked input
         labels = input_ids.clone()
         masked_ids = input_ids.clone()
@@ -197,10 +293,15 @@ class MLMCollator:
         }
 
 
-def train_epoch(model, dataloader, optimizer, scheduler, device):
-    """Train for one epoch."""
+# ============================================================================
+# Training and Validation
+# ============================================================================
+
+def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: PerformanceTracker):
+    """Train for one epoch with loss tracking."""
     model.train()
     total_loss = 0
+    batch_count = 0
     progress_bar = tqdm(dataloader, desc="Training")
 
     for batch in progress_bar:
@@ -219,15 +320,21 @@ def train_epoch(model, dataloader, optimizer, scheduler, device):
         scheduler.step()
 
         total_loss += loss.item()
+        batch_count += 1
+
+        # Log batch metrics
+        tracker.log_batch('train', loss.item())
+
         progress_bar.set_postfix({'loss': loss.item()})
 
-    return total_loss / len(dataloader)
+    return total_loss / batch_count
 
 
-def validate(model, dataloader, device):
-    """Validate the model."""
+def validate(model, dataloader, device, tracker: PerformanceTracker):
+    """Validate the model with loss tracking."""
     model.eval()
     total_loss = 0
+    batch_count = 0
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Validation"):
@@ -236,9 +343,14 @@ def validate(model, dataloader, device):
                 attention_mask=batch['attention_mask'].to(device),
                 labels=batch['labels'].to(device)
             )
-            total_loss += outputs.loss.item()
 
-    return total_loss / len(dataloader)
+            total_loss += outputs.loss.item()
+            batch_count += 1
+
+            # Log batch metrics
+            tracker.log_batch('val', outputs.loss.item())
+
+    return total_loss / batch_count
 
 
 def main():
@@ -278,8 +390,9 @@ def main():
         device = torch.device("cpu")
         print("Using CPU")
 
-    # Create output directory
+    # Create output directory and tracker
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    tracker = PerformanceTracker(args.output_dir)
 
     # Load UniXcoder tokenizer and model
     print("Loading UniXcoder base-nine (trained on C++)...")
@@ -334,12 +447,20 @@ def main():
     for epoch in range(args.epochs):
         print(f"\n{'=' * 20} Epoch {epoch + 1}/{args.epochs} {'=' * 20}")
 
-        train_loss = train_epoch(model, train_dl, optimizer, scheduler, device)
-        val_loss = validate(model, val_dl, device)
+        train_loss = train_epoch(model, train_dl, optimizer, scheduler, device, tracker)
+        val_loss = validate(model, val_dl, device, tracker)
+
+        # Get current learning rate
+        current_lr = optimizer.param_groups[0]['lr']
+
+        # Log epoch metrics
+        tracker.log_epoch(epoch, 'train', train_loss, current_lr)
+        tracker.log_epoch(epoch, 'val', val_loss)
 
         print(f"Train Loss: {train_loss:.4f} | Validation Loss: {val_loss:.4f}")
+        print(f"Learning Rate: {current_lr:.2e}")
 
-        if val_loss < best_val_loss:
+        if tracker.update_best(val_loss, epoch):
             best_val_loss = val_loss
             checkpoint_path = Path(args.output_dir) / "best_model"
             print(f"New best model found! Saving to {checkpoint_path}")
@@ -347,6 +468,12 @@ def main():
             tokenizer.save_pretrained(checkpoint_path)
 
     print(f"\n{'=' * 15} Training complete! Best validation loss: {best_val_loss:.4f} {'=' * 15}")
+
+    # Save all performance metrics
+    print("\n" + "="*50)
+    print("SAVING PERFORMANCE METRICS...")
+    print("="*50)
+    tracker.save()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+{
+  "total_epochs": 2,
+  "best_epoch": 1,
+  "best_val_loss": 40.94099950790405,
+  "final_train_loss": 40.372862882392354,
+  "final_val_loss": 40.94099950790405,
+  "min_train_loss": 36.140213833298795,
+  "min_val_loss": 40.94099950790405,
+  "total_batches_train": 86,
+  "total_batches_val": 16
+}
