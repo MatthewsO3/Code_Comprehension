@@ -1,9 +1,7 @@
 """
-Train UniXcoder on MLM task for C++ code.
-Based on the UniXcoder paper - uses unified architecture with mask attention.
-Supports config.json for settings.
-Includes AST (Abstract Syntax Tree) extraction using tree-sitter.
-WITH COMPREHENSIVE LOSS AND PERFORMANCE TRACKING
+Train UniXcoder on MLM task for C++ code - OPTIMIZED VERSION.
+Includes early stopping, dropout, learning rate warmup, mixed precision,
+and overfitting prevention techniques.
 """
 import os
 import json
@@ -16,6 +14,7 @@ from dataclasses import dataclass
 from torch.utils.data import Dataset, DataLoader
 from transformers import RobertaForMaskedLM, RobertaTokenizer, get_linear_schedule_with_warmup
 from torch.optim import AdamW
+from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
 
 try:
@@ -26,7 +25,7 @@ try:
     ts_parser = Parser(CPP_LANGUAGE)
 except ImportError:
     TS_AVAILABLE = False
-    print("Warning: tree_sitter not available. AST extraction will fail.")
+    print("Warning: tree_sitter not available.")
 
 
 def set_seed(seed=42):
@@ -41,32 +40,26 @@ set_seed(42)
 
 
 # ============================================================================
-# Performance Tracker
+# Performance Tracker with Early Stopping
 # ============================================================================
 
 class PerformanceTracker:
-    """Tracks and saves all performance metrics during training."""
-    def __init__(self, output_dir: str):
+    """Tracks metrics with early stopping support."""
+    def __init__(self, output_dir: str, patience: int = 3):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.patience = patience
+        self.patience_counter = 0
+        self.best_val_loss = float('inf')
 
         self.history = {
             'epoch': [],
             'train_loss': [],
-            'train_batch_losses': [],  # All batch losses
             'val_loss': [],
-            'val_batch_losses': [],  # All batch losses
             'learning_rate': [],
             'best_val_loss': None,
             'best_epoch': None,
         }
-
-    def log_batch(self, phase: str, loss):
-        """Log individual batch metrics."""
-        if phase == 'train':
-            self.history['train_batch_losses'].append(loss)
-        else:
-            self.history['val_batch_losses'].append(loss)
 
     def log_epoch(self, epoch: int, phase: str, loss, lr=None):
         """Log epoch-level metrics."""
@@ -78,48 +71,27 @@ class PerformanceTracker:
         else:
             self.history['val_loss'].append(loss)
 
-    def update_best(self, val_loss, epoch):
-        """Update best validation loss."""
-        if self.history['best_val_loss'] is None or val_loss < self.history['best_val_loss']:
+    def should_stop_early(self, val_loss: float, epoch: int) -> bool:
+        """Check if training should stop early."""
+        if val_loss < self.best_val_loss:
+            self.best_val_loss = val_loss
             self.history['best_val_loss'] = val_loss
             self.history['best_epoch'] = epoch
-            return True
+            self.patience_counter = 0
+            return False
+        else:
+            self.patience_counter += 1
+            if self.patience_counter >= self.patience:
+                return True
         return False
 
     def save(self):
-        """Save all metrics to JSON files."""
-        # Save detailed history
+        """Save metrics to JSON and CSV."""
         history_path = self.output_dir / 'training_history.json'
         with open(history_path, 'w') as f:
             json.dump(self.history, f, indent=2)
         print(f"✓ Saved training history to {history_path}")
 
-        # Save summary statistics
-        summary = self._compute_summary()
-        summary_path = self.output_dir / 'training_summary.json'
-        with open(summary_path, 'w') as f:
-            json.dump(summary, f, indent=2)
-        print(f"✓ Saved training summary to {summary_path}")
-
-        # Save CSV for easy plotting
-        self._save_csv()
-
-    def _compute_summary(self) -> Dict:
-        """Compute summary statistics."""
-        return {
-            'total_epochs': len(self.history['epoch']),
-            'best_epoch': self.history['best_epoch'],
-            'best_val_loss': self.history['best_val_loss'],
-            'final_train_loss': self.history['train_loss'][-1] if self.history['train_loss'] else None,
-            'final_val_loss': self.history['val_loss'][-1] if self.history['val_loss'] else None,
-            'min_train_loss': min(self.history['train_loss']) if self.history['train_loss'] else None,
-            'min_val_loss': min(self.history['val_loss']) if self.history['val_loss'] else None,
-            'total_batches_train': len(self.history['train_batch_losses']),
-            'total_batches_val': len(self.history['val_batch_losses']),
-        }
-
-    def _save_csv(self):
-        """Save epoch-level metrics as CSV."""
         try:
             import csv
             csv_path = self.output_dir / 'training_metrics.csv'
@@ -139,38 +111,11 @@ class PerformanceTracker:
 
 
 # ============================================================================
-# AST Extraction
-# ============================================================================
-
-def extract_ast_sequence(tree) -> List[str]:
-    """
-    Extract AST node sequence from tree-sitter parse tree.
-    Performs DFS traversal and collects node types.
-    """
-    if not TS_AVAILABLE:
-        return []
-
-    ast_nodes = []
-
-    def traverse(node):
-        ast_nodes.append(node.type)
-        for child in node.children:
-            traverse(child)
-
-    traverse(tree.root_node)
-    return ast_nodes
-
-
-# ============================================================================
 # Dataset
 # ============================================================================
 
 class UniXcoderDataset(Dataset):
-    """
-    Dataset for UniXcoder MLM training.
-    Unlike GraphCodeBERT, UniXcoder doesn't require DFG preprocessing.
-    Includes AST extraction using tree-sitter.
-    """
+    """Dataset for UniXcoder MLM training."""
     def __init__(self, jsonl_file: str, tokenizer, max_length=512):
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -192,30 +137,16 @@ class UniXcoderDataset(Dataset):
         return self.convert_sample_to_features(self.samples[idx])
 
     def convert_sample_to_features(self, sample: Dict) -> Dict:
-        """
-        Convert code to input features for UniXcoder.
-        UniXcoder uses simpler preprocessing than GraphCodeBERT.
-        Includes AST from sample if available.
-        """
+        """Convert code to features."""
         code_tokens = sample['code_tokens']
-        ast = sample.get('ast', [])
 
-        # Truncate if too long
-        if len(code_tokens) > self.max_length - 2:  # -2 for CLS and SEP
+        if len(code_tokens) > self.max_length - 2:
             code_tokens = code_tokens[:self.max_length - 2]
 
-        # Add special tokens: [CLS] code [SEP]
         tokens = [self.tokenizer.cls_token] + code_tokens + [self.tokenizer.sep_token]
-
-        # Convert to IDs
         input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
-
-        # Create attention mask (all 1s for UniXcoder encoder mode)
-        # UniXcoder uses different mask patterns for encoder/decoder modes
-        # For MLM (encoder mode), all tokens attend to each other
         attention_mask = [1] * len(input_ids)
 
-        # Padding
         padding_len = self.max_length - len(input_ids)
         input_ids.extend([self.tokenizer.pad_token_id] * padding_len)
         attention_mask.extend([0] * padding_len)
@@ -223,16 +154,12 @@ class UniXcoderDataset(Dataset):
         return {
             'input_ids': torch.tensor(input_ids),
             'attention_mask': torch.tensor(attention_mask),
-            'ast': ast  # Include AST for potential future use
         }
 
 
 @dataclass
 class MLMCollator:
-    """
-    Data collator for MLM task.
-    Masks tokens according to BERT-style MLM.
-    """
+    """Data collator for MLM task."""
     tokenizer: RobertaTokenizer
     mlm_probability: float = 0.15
 
@@ -240,19 +167,16 @@ class MLMCollator:
         input_ids = torch.stack([ex['input_ids'] for ex in examples])
         attention_mask = torch.stack([ex['attention_mask'] for ex in examples])
 
-        # Prepare labels and masked input
         labels = input_ids.clone()
         masked_ids = input_ids.clone()
 
         for i in range(len(examples)):
-            # Find positions to mask (exclude special tokens and padding)
             special_tokens_mask = [
                 1 if token_id in [self.tokenizer.cls_token_id, self.tokenizer.sep_token_id,
                                   self.tokenizer.pad_token_id] else 0
                 for token_id in input_ids[i].tolist()
             ]
 
-            # Get maskable positions
             maskable_positions = [
                 pos for pos, is_special in enumerate(special_tokens_mask)
                 if not is_special
@@ -261,29 +185,20 @@ class MLMCollator:
             if len(maskable_positions) == 0:
                 continue
 
-            # Calculate number of tokens to mask
             num_mask = max(1, int(len(maskable_positions) * self.mlm_probability))
-
-            # Randomly select positions
             mask_positions = random.sample(maskable_positions, min(num_mask, len(maskable_positions)))
 
-            # Apply masking strategy (80% MASK, 10% random, 10% unchanged)
             for pos in mask_positions:
                 rand = random.random()
                 if rand < 0.8:
-                    # 80% replace with [MASK]
                     masked_ids[i, pos] = self.tokenizer.mask_token_id
                 elif rand < 0.9:
-                    # 10% replace with random token
                     masked_ids[i, pos] = random.randint(0, self.tokenizer.vocab_size - 1)
-                # 10% keep original (else clause - do nothing)
 
-            # Set labels: -100 for non-masked tokens
             mask_indicator = torch.zeros_like(labels[i], dtype=torch.bool)
             mask_indicator[mask_positions] = True
             labels[i, ~mask_indicator] = -100
 
-        # Set padding labels to -100
         labels[input_ids == self.tokenizer.pad_token_id] = -100
 
         return {
@@ -297,58 +212,70 @@ class MLMCollator:
 # Training and Validation
 # ============================================================================
 
-def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: PerformanceTracker):
-    """Train for one epoch with loss tracking."""
+def train_epoch(model, dataloader, optimizer, scheduler, device, scaler, use_amp=False):
+    """Train for one epoch with mixed precision support."""
     model.train()
     total_loss = 0
     batch_count = 0
-    progress_bar = tqdm(dataloader, desc="Training")
 
-    for batch in progress_bar:
+    for batch in tqdm(dataloader, desc="Training"):
         optimizer.zero_grad()
 
-        outputs = model(
-            input_ids=batch['input_ids'].to(device),
-            attention_mask=batch['attention_mask'].to(device),
-            labels=batch['labels'].to(device)
-        )
+        if use_amp:
+            with autocast():
+                outputs = model(
+                    input_ids=batch['input_ids'].to(device),
+                    attention_mask=batch['attention_mask'].to(device),
+                    labels=batch['labels'].to(device)
+                )
+                loss = outputs.loss
 
-        loss = outputs.loss
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+            scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(
+                input_ids=batch['input_ids'].to(device),
+                attention_mask=batch['attention_mask'].to(device),
+                labels=batch['labels'].to(device)
+            )
+            loss = outputs.loss
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
         scheduler.step()
-
         total_loss += loss.item()
         batch_count += 1
-
-        # Log batch metrics
-        tracker.log_batch('train', loss.item())
-
-        progress_bar.set_postfix({'loss': loss.item()})
 
     return total_loss / batch_count
 
 
-def validate(model, dataloader, device, tracker: PerformanceTracker):
-    """Validate the model with loss tracking."""
+def validate(model, dataloader, device, use_amp=False):
+    """Validate the model."""
     model.eval()
     total_loss = 0
     batch_count = 0
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Validation"):
-            outputs = model(
-                input_ids=batch['input_ids'].to(device),
-                attention_mask=batch['attention_mask'].to(device),
-                labels=batch['labels'].to(device)
-            )
+            if use_amp:
+                with autocast():
+                    outputs = model(
+                        input_ids=batch['input_ids'].to(device),
+                        attention_mask=batch['attention_mask'].to(device),
+                        labels=batch['labels'].to(device)
+                    )
+            else:
+                outputs = model(
+                    input_ids=batch['input_ids'].to(device),
+                    attention_mask=batch['attention_mask'].to(device),
+                    labels=batch['labels'].to(device)
+                )
 
             total_loss += outputs.loss.item()
             batch_count += 1
-
-            # Log batch metrics
-            tracker.log_batch('val', outputs.loss.item())
 
     return total_loss / batch_count
 
@@ -365,8 +292,10 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=None)
     parser.add_argument('--mlm_probability', type=float, default=None)
     parser.add_argument('--validation_split', type=float, default=None)
+    parser.add_argument('--weight_decay', type=float, default=0.01)
+    parser.add_argument('--early_stopping_patience', type=int, default=3)
+    parser.add_argument('--use_amp', action='store_true', help='Use mixed precision training')
 
-    # Load config from file
     config = {}
     if os.path.exists('config.json'):
         with open('config.json', 'r') as f:
@@ -383,96 +312,95 @@ def main():
     if torch.backends.mps.is_available():
         device = torch.device("mps")
         print("Using Apple Silicon GPU (MPS)")
+        use_amp = False
     elif torch.cuda.is_available():
         device = torch.device("cuda")
         print("Using NVIDIA GPU (CUDA)")
+        use_amp = args.use_amp
     else:
         device = torch.device("cpu")
         print("Using CPU")
+        use_amp = False
 
-    # Create output directory and tracker
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    tracker = PerformanceTracker(args.output_dir)
+    tracker = PerformanceTracker(args.output_dir, patience=args.early_stopping_patience)
 
-    # Load UniXcoder tokenizer and model
-    print("Loading UniXcoder base-nine (trained on C++)...")
+    print("Loading UniXcoder base-nine...")
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/unixcoder-base-nine")
-
-    # UniXcoder base-nine doesn't have MLM head released, so we add it
-    # We load the base model and add MLM head
     model = RobertaForMaskedLM.from_pretrained("microsoft/unixcoder-base-nine")
-    print("✓ Loaded UniXcoder base-nine with MLM head")
+
+    # Add dropout for regularization
+    model.config.hidden_dropout_prob = 0.2
+    model.config.attention_probs_dropout_prob = 0.2
 
     model = model.to(device)
+    print("✓ Loaded UniXcoder base-nine with dropout regularization")
 
-    # Load dataset
+    # Load and split dataset
     full_dataset = UniXcoderDataset(args.data_file, tokenizer, args.max_length)
     val_size = int(args.validation_split * len(full_dataset))
     train_dataset, val_dataset = torch.utils.data.random_split(
         full_dataset, [len(full_dataset) - val_size, val_size]
     )
 
-    # Create dataloaders
     collator = MLMCollator(tokenizer, mlm_probability=args.mlm_probability)
     train_dl = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         collate_fn=collator,
-        num_workers=min(4, os.cpu_count() or 1)
+        num_workers=min(4, os.cpu_count() or 1),
+        pin_memory=True
     )
     val_dl = DataLoader(
         val_dataset,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size * 2,
         collate_fn=collator,
-        num_workers=min(4, os.cpu_count() or 1)
+        num_workers=min(4, os.cpu_count() or 1),
+        pin_memory=True
     )
 
-    # Optimizer and scheduler
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate)
+    # Optimizer with weight decay (L2 regularization)
+    optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
         num_warmup_steps=args.warmup_steps,
         num_training_steps=len(train_dl) * args.epochs
     )
 
-    # Print configuration
+    scaler = GradScaler() if use_amp else None
+
     print("\n--- Training Configuration ---")
     for k, v in vars(args).items():
         print(f"  {k}: {v}")
+    print(f"  use_amp: {use_amp}")
+    print(f"  device: {device}")
     print("------------------------------\n")
 
-    # Training loop
-    best_val_loss = float('inf')
     for epoch in range(args.epochs):
         print(f"\n{'=' * 20} Epoch {epoch + 1}/{args.epochs} {'=' * 20}")
 
-        train_loss = train_epoch(model, train_dl, optimizer, scheduler, device, tracker)
-        val_loss = validate(model, val_dl, device, tracker)
+        train_loss = train_epoch(model, train_dl, optimizer, scheduler, device, scaler, use_amp)
+        val_loss = validate(model, val_dl, device, use_amp)
 
-        # Get current learning rate
         current_lr = optimizer.param_groups[0]['lr']
-
-        # Log epoch metrics
         tracker.log_epoch(epoch, 'train', train_loss, current_lr)
         tracker.log_epoch(epoch, 'val', val_loss)
 
         print(f"Train Loss: {train_loss:.4f} | Validation Loss: {val_loss:.4f}")
         print(f"Learning Rate: {current_lr:.2e}")
 
-        if tracker.update_best(val_loss, epoch):
-            best_val_loss = val_loss
+        if val_loss < tracker.best_val_loss:
             checkpoint_path = Path(args.output_dir) / "best_model"
-            print(f"New best model found! Saving to {checkpoint_path}")
+            print(f"✓ New best model! Saving to {checkpoint_path}")
             model.save_pretrained(checkpoint_path)
             tokenizer.save_pretrained(checkpoint_path)
 
-    print(f"\n{'=' * 15} Training complete! Best validation loss: {best_val_loss:.4f} {'=' * 15}")
+        if tracker.should_stop_early(val_loss, epoch):
+            print(f"\n⚠️ Early stopping triggered! No improvement for {args.early_stopping_patience} epochs.")
+            break
 
-    # Save all performance metrics
-    print("\n" + "="*50)
-    print("SAVING PERFORMANCE METRICS...")
-    print("="*50)
+    print(f"\n{'=' * 15} Training complete! Best val loss: {tracker.best_val_loss:.4f} {'=' * 15}")
     tracker.save()
 
 
