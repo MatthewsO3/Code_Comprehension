@@ -31,6 +31,7 @@ graphcodebert-cpp-codesearch-model/
 *.egg
 GraphCodeBert_CPP/
 GraphCodeBert_CPP/idea
+unixcoder_cpp.jsonl
 *.DS_Store
 DS_Store/
 .DS_Store/
