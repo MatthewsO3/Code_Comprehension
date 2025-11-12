@@ -22,6 +22,105 @@ class Args:
     pass
 
 
+class PerformanceTracker:
+    """Tracks and saves all performance metrics during training."""
+    def __init__(self, output_dir: str):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.history = {
+            'epoch': [],
+            'train_total_loss': [],
+            'train_ce_loss': [],
+            'train_neg_loss': [],
+            'train_batch_losses': [],
+            'train_ce_batch_losses': [],
+            'train_neg_batch_losses': [],
+            'learning_rate': [],
+            'best_loss': None,
+            'best_epoch': None,
+        }
+
+    def log_batch(self, total_loss, ce_loss, neg_loss):
+        """Log individual batch metrics."""
+        self.history['train_batch_losses'].append(total_loss)
+        self.history['train_ce_batch_losses'].append(ce_loss)
+        self.history['train_neg_batch_losses'].append(neg_loss)
+
+    def log_epoch(self, epoch: int, total_loss, ce_loss, neg_loss, lr=None):
+        """Log epoch-level metrics."""
+        self.history['epoch'].append(epoch)
+        self.history['train_total_loss'].append(total_loss)
+        self.history['train_ce_loss'].append(ce_loss)
+        self.history['train_neg_loss'].append(neg_loss)
+        if lr is not None:
+            self.history['learning_rate'].append(lr)
+
+    def update_best(self, loss, epoch):
+        """Update best loss."""
+        if self.history['best_loss'] is None or loss < self.history['best_loss']:
+            self.history['best_loss'] = loss
+            self.history['best_epoch'] = epoch
+            return True
+        return False
+
+    def save(self):
+        """Save all metrics to JSON files."""
+        # Save detailed history
+        history_path = self.output_dir / 'training_history.json'
+        with open(history_path, 'w') as f:
+            json.dump(self.history, f, indent=2)
+        print(f"✓ Saved training history to {history_path}")
+
+        # Save summary statistics
+        summary = self._compute_summary()
+        summary_path = self.output_dir / 'training_summary.json'
+        with open(summary_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        print(f"✓ Saved training summary to {summary_path}")
+
+        # Save CSV for easy plotting
+        self._save_csv()
+
+    def _compute_summary(self) -> dict:
+        """Compute summary statistics."""
+        return {
+            'total_epochs': len(self.history['epoch']),
+            'best_epoch': self.history['best_epoch'],
+            'best_loss': self.history['best_loss'],
+            'final_train_loss': self.history['train_total_loss'][-1] if self.history['train_total_loss'] else None,
+            'min_train_loss': min(self.history['train_total_loss']) if self.history['train_total_loss'] else None,
+            'max_train_loss': max(self.history['train_total_loss']) if self.history['train_total_loss'] else None,
+            'final_ce_loss': self.history['train_ce_loss'][-1] if self.history['train_ce_loss'] else None,
+            'final_neg_loss': self.history['train_neg_loss'][-1] if self.history['train_neg_loss'] else None,
+            'total_batches': len(self.history['train_batch_losses']),
+            'avg_batch_loss': np.mean(self.history['train_batch_losses']) if self.history['train_batch_losses'] else None,
+            'std_batch_loss': np.std(self.history['train_batch_losses']) if self.history['train_batch_losses'] else None,
+        }
+
+    def _save_csv(self):
+        """Save epoch-level metrics as CSV."""
+        try:
+            import csv
+            csv_path = self.output_dir / 'training_metrics.csv'
+            with open(csv_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    'Epoch', 'Train Total Loss', 'Train CE Loss', 'Train Neg Loss', 'Learning Rate'
+                ])
+                for i in range(len(self.history['epoch'])):
+                    writer.writerow([
+                        self.history['epoch'][i],
+                        self.history['train_total_loss'][i],
+                        self.history['train_ce_loss'][i],
+                        self.history['train_neg_loss'][i],
+                        self.history['learning_rate'][i] if i < len(self.history['learning_rate']) else '',
+                    ])
+            print(f"✓ Saved metrics CSV to {csv_path}")
+        except Exception as e:
+            print(f"⚠️ Could not save CSV: {e}")
+
+
 class CodeSearchDataset(Dataset):
     """Dataset for code search with triplet loss using hard negatives."""
 
@@ -113,8 +212,8 @@ def collate_fn(batch):
     return (code_ids, code_mask, good_ids, good_mask, bad1_ids, bad1_mask, bad2_ids, bad2_mask)
 
 
-def train_epoch(model, train_dataloader, optimizer, scheduler, device, args):
-    """Train for one epoch with detailed progress reporting."""
+def train_epoch(model, train_dataloader, optimizer, scheduler, device, args, tracker: PerformanceTracker):
+    """Train for one epoch with detailed progress reporting and loss tracking."""
     model.train()
 
     total_loss = 0.0
@@ -179,6 +278,9 @@ def train_epoch(model, train_dataloader, optimizer, scheduler, device, args):
         total_ce_loss += ce_loss.item()
         total_neg_loss += neg_loss.item()
         num_batches += 1
+
+        # Log batch metrics
+        tracker.log_batch(total_loss_batch.item(), ce_loss.item(), neg_loss.item())
 
         # Update progress bar with metrics
         avg_loss = total_loss / num_batches
@@ -279,7 +381,7 @@ def main():
     args.neg_weight = cli_args.neg_weight or codesearch_config.get('neg_weight', 0.5)
     args.seed = cli_args.seed or codesearch_config.get('seed', 42)
 
-    # NEW: Anti-overfitting parameters from config
+    # Anti-overfitting parameters from config
     args.early_stopping_patience = codesearch_config.get('early_stopping_patience', 3)
     args.early_stopping_delta = codesearch_config.get('early_stopping_delta', 0.001)
 
@@ -320,6 +422,9 @@ def main():
     # Create output directory
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
+
+    # Initialize performance tracker
+    tracker = PerformanceTracker(str(args.output_dir))
 
     # Load tokenizer and model
     logger.info(f"Loading tokenizer from {args.tokenizer_name or args.model_name_or_path}")
@@ -387,16 +492,24 @@ def main():
         print(f"Epoch {epoch + 1}/{args.num_train_epochs}")
         print(f"{'=' * 60}")
 
-        train_loss, train_ce, train_neg = train_epoch(model, train_dataloader, optimizer, scheduler, device, args)
+        train_loss, train_ce, train_neg = train_epoch(
+            model, train_dataloader, optimizer, scheduler, device, args, tracker
+        )
+
+        # Get current learning rate
+        current_lr = optimizer.param_groups[0]['lr']
+
+        # Log epoch metrics
+        tracker.log_epoch(epoch, train_loss, train_ce, train_neg, current_lr)
 
         print(f"\nEpoch {epoch + 1} Results:")
         print(f"  Total Loss: {train_loss:.4f}")
         print(f"  CE Loss:    {train_ce:.4f}")
         print(f"  Neg Loss:   {train_neg:.4f}")
+        print(f"  Learning Rate: {current_lr:.2e}")
 
-        # Early stopping logic
-        if train_loss < best_loss - args.early_stopping_delta:
-            best_loss = train_loss
+        # Update best loss tracking
+        if tracker.update_best(train_loss, epoch):
             patience_counter = 0
 
             checkpoint_path = Path(args.output_dir) / "best_model"
@@ -409,7 +522,7 @@ def main():
             model_to_save.encoder.save_pretrained(checkpoint_path)
             tokenizer.save_pretrained(checkpoint_path)
 
-            logger.info(f"Saved best model with loss: {best_loss:.4f}")
+            logger.info(f"Saved best model with loss: {train_loss:.4f}")
         else:
             patience_counter += 1
             print(f"\nNo improvement. Patience: {patience_counter}/{args.early_stopping_patience}")
@@ -420,8 +533,14 @@ def main():
 
     print(f"\n{'=' * 60}")
     print(f"Training completed!")
-    print(f"Best loss: {best_loss:.4f}")
+    print(f"Best loss: {tracker.history['best_loss']:.4f} at epoch {tracker.history['best_epoch']}")
     print(f"{'=' * 60}\n")
+
+    # Save all performance metrics
+    print("\n" + "="*60)
+    print("SAVING PERFORMANCE METRICS...")
+    print("="*60)
+    tracker.save()
 
 
 if __name__ == "__main__":
