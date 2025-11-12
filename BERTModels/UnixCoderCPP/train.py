@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from torch.utils.data import Dataset, DataLoader
 from transformers import RobertaForMaskedLM, RobertaTokenizer, get_linear_schedule_with_warmup
 from torch.optim import AdamW
-from torch.cuda.amp import autocast, GradScaler
+from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 
 try:
@@ -222,7 +222,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, scaler, use_amp
         optimizer.zero_grad()
 
         if use_amp:
-            with autocast():
+            with torch.amp.autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
                 outputs = model(
                     input_ids=batch['input_ids'].to(device),
                     attention_mask=batch['attention_mask'].to(device),
@@ -244,8 +244,8 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, scaler, use_amp
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+            scheduler.step()
 
-        scheduler.step()
         total_loss += loss.item()
         batch_count += 1
 
@@ -261,7 +261,7 @@ def validate(model, dataloader, device, use_amp=False):
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Validation"):
             if use_amp:
-                with autocast():
+                with torch.amp.autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
                     outputs = model(
                         input_ids=batch['input_ids'].to(device),
                         attention_mask=batch['attention_mask'].to(device),
