@@ -1,6 +1,7 @@
 """
 Train GraphCodeBERT on MLM + Edge Prediction tasks with DFG for C++ code.
 Implements the dual-objective pre-training from GraphCodeBERT paper.
+OPTIMIZED VERSION with early stopping, dropout, mixed precision, and weight decay.
 WITH COMPREHENSIVE LOSS AND PERFORMANCE TRACKING
 """
 import os
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from torch.utils.data import Dataset, DataLoader
 from transformers import RobertaForMaskedLM, RobertaTokenizer, get_linear_schedule_with_warmup
 from torch.optim import AdamW
+from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 from collections import defaultdict
 
@@ -26,28 +28,32 @@ def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 set_seed(42)
 
 
 class PerformanceTracker:
     """Tracks and saves all performance metrics during training."""
-    def __init__(self, output_dir: str):
+    def __init__(self, output_dir: str, patience: int = 3):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.patience = patience
+        self.patience_counter = 0
+        self.best_val_loss = float('inf')
 
         self.history = {
             'epoch': [],
             'train_total_loss': [],
             'train_mlm_loss': [],
             'train_edge_loss': [],
-            'train_batch_losses': [],  # All batch losses
+            'train_batch_losses': [],
             'train_mlm_batch_losses': [],
             'train_edge_batch_losses': [],
             'val_total_loss': [],
             'val_mlm_loss': [],
             'val_edge_loss': [],
-            'val_batch_losses': [],  # All batch losses
+            'val_batch_losses': [],
             'val_mlm_batch_losses': [],
             'val_edge_batch_losses': [],
             'learning_rate': [],
@@ -81,29 +87,34 @@ class PerformanceTracker:
             self.history['val_edge_loss'].append(edge_loss)
 
     def update_best(self, val_loss, epoch):
-        """Update best validation loss."""
-        if self.history['best_val_loss'] is None or val_loss < self.history['best_val_loss']:
+        """Update best validation loss and handle early stopping."""
+        if val_loss < self.best_val_loss:
+            self.best_val_loss = val_loss
             self.history['best_val_loss'] = val_loss
             self.history['best_epoch'] = epoch
+            self.patience_counter = 0
             return True
-        return False
+        else:
+            self.patience_counter += 1
+            return False
+
+    def should_stop_early(self) -> bool:
+        """Check if training should stop early."""
+        return self.patience_counter >= self.patience
 
     def save(self):
         """Save all metrics to JSON files."""
-        # Save detailed history
         history_path = self.output_dir / 'training_history.json'
         with open(history_path, 'w') as f:
             json.dump(self.history, f, indent=2)
         print(f"✓ Saved training history to {history_path}")
 
-        # Save summary statistics
         summary = self._compute_summary()
         summary_path = self.output_dir / 'training_summary.json'
         with open(summary_path, 'w') as f:
             json.dump(summary, f, indent=2)
         print(f"✓ Saved training summary to {summary_path}")
 
-        # Save CSV for easy plotting
         self._save_csv()
 
     def _compute_summary(self) -> Dict:
@@ -151,11 +162,8 @@ class PerformanceTracker:
             print(f"⚠️ Could not save CSV: {e}")
 
 
-"""
-Custom Dataset for GraphCodeBERT with DFG processing
-Converts code tokens and DFG into model inputs
-"""
 class GraphCodeBERTDataset(Dataset):
+    """Custom Dataset for GraphCodeBERT with DFG processing"""
     def __init__(self, jsonl_file: str, tokenizer, max_length=512):
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -226,27 +234,28 @@ class GraphCodeBERTDataset(Dataset):
             'input_ids': torch.tensor(input_ids),
             'attention_mask': torch.tensor(attn_mask),
             'position_idx': torch.tensor(position_idx),
-            'dfg_info': {  # NEW - needed for edge prediction
+            'dfg_info': {
                 'nodes': dfg_nodes,
                 'edges': [(i, j) for i, adjs in adj.items() for j in adjs]
             }
         }
 
-"""
-GraphCodeBERT with MLM and Edge Prediction heads
-Uses GraphCodeBERT as base and adds edge prediction module
-Forward method computes both MLM and edge prediction losses
-Saves both base model and edge classifier
-"""
+
 class GraphCodeBERTWithEdgePrediction(nn.Module):
+    """GraphCodeBERT with MLM and Edge Prediction heads"""
     def __init__(self, base_model_name: str = "microsoft/graphcodebert-base"):
         super().__init__()
         self.roberta_mlm = RobertaForMaskedLM.from_pretrained(base_model_name)
         hidden_size = self.roberta_mlm.config.hidden_size
+
+        # Add dropout for regularization
+        self.roberta_mlm.config.hidden_dropout_prob = 0.2
+        self.roberta_mlm.config.attention_probs_dropout_prob = 0.2
+
         self.edge_classifier = nn.Sequential(
             nn.Linear(hidden_size * 2, hidden_size),
             nn.Tanh(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.2),
             nn.Linear(hidden_size, 1)
         )
 
@@ -264,7 +273,6 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
             hidden_states = mlm_outputs.hidden_states[-1]
             batch_size, seq_len, hidden_size = hidden_states.shape
 
-            # Gather node representations
             node1_repr = hidden_states[edge_batch_idx, edge_node1_pos]
             node2_repr = hidden_states[edge_batch_idx, edge_node2_pos]
             edge_repr = torch.cat([node1_repr, node2_repr], dim=-1)
@@ -285,14 +293,9 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
         torch.save(self.edge_classifier.state_dict(), f"{save_directory}/edge_classifier.pt")
 
 
-
-"""
-Data collator for MLM and Edge Prediction
-Applies MLM masking and prepares edge prediction samples
-Prepares batch tensors for model input
-"""
 @dataclass
 class MLMWithEdgePredictionCollator:
+    """Data collator for MLM and Edge Prediction"""
     tokenizer: RobertaTokenizer
     mlm_probability: float = 0.15
     edge_sample_ratio: float = 0.3
@@ -367,13 +370,8 @@ class MLMWithEdgePredictionCollator:
         }
 
 
-"""
-Training and validation loops with loss tracking
-Batch-wise training with optimizer and scheduler steps
-Logs losses for MLM and edge prediction
-Returns average losses per epoch and tracks all batch losses
-"""
-def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: PerformanceTracker):
+def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: PerformanceTracker, scaler, use_amp=False):
+    """Training loop with loss tracking and mixed precision support"""
     model.train()
     total_loss = total_mlm = total_edge = 0
     batch_count = 0
@@ -381,52 +379,25 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
 
     for batch in progress_bar:
         optimizer.zero_grad()
-        loss, mlm_loss, edge_loss = model(
-            input_ids=batch['input_ids'].to(device),
-            attention_mask=batch['attention_mask'].to(device),
-            position_ids=batch['position_ids'].to(device),
-            labels=batch['labels'].to(device),
-            edge_batch_idx=batch['edge_batch_idx'].to(device),
-            edge_node1_pos=batch['edge_node1_pos'].to(device),
-            edge_node2_pos=batch['edge_node2_pos'].to(device),
-            edge_labels=batch['edge_labels'].to(device)
-        )
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
-        scheduler.step()
 
-        total_loss += loss.item()
-        if mlm_loss: total_mlm += mlm_loss.item()
-        if edge_loss: total_edge += edge_loss.item()
-        batch_count += 1
+        if use_amp:
+            with torch.amp.autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
+                loss, mlm_loss, edge_loss = model(
+                    input_ids=batch['input_ids'].to(device),
+                    attention_mask=batch['attention_mask'].to(device),
+                    position_ids=batch['position_ids'].to(device),
+                    labels=batch['labels'].to(device),
+                    edge_batch_idx=batch['edge_batch_idx'].to(device),
+                    edge_node1_pos=batch['edge_node1_pos'].to(device),
+                    edge_node2_pos=batch['edge_node2_pos'].to(device),
+                    edge_labels=batch['edge_labels'].to(device)
+                )
 
-        # Log batch metrics
-        tracker.log_batch('train', loss.item(),
-                         mlm_loss.item() if mlm_loss else None,
-                         edge_loss.item() if edge_loss else None)
-
-        progress_bar.set_postfix({
-            'loss': loss.item(),
-            'mlm': mlm_loss.item() if mlm_loss else 0,
-            'edge': edge_loss.item() if edge_loss else 0
-        })
-
-    return (total_loss / batch_count, total_mlm / batch_count, total_edge / batch_count)
-
-
-"""
-Validation loop with loss tracking
-Evaluates model on validation set without gradient updates
-Calculates and returns average losses
-"""
-def validate(model, dataloader, device, tracker: PerformanceTracker):
-    model.eval()
-    total_loss = total_mlm = total_edge = 0
-    batch_count = 0
-
-    with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Validation"):
+            scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
             loss, mlm_loss, edge_loss = model(
                 input_ids=batch['input_ids'].to(device),
                 attention_mask=batch['attention_mask'].to(device),
@@ -437,27 +408,87 @@ def validate(model, dataloader, device, tracker: PerformanceTracker):
                 edge_node2_pos=batch['edge_node2_pos'].to(device),
                 edge_labels=batch['edge_labels'].to(device)
             )
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+        scheduler.step()
+
+        total_loss += loss.item()
+        if mlm_loss: total_mlm += mlm_loss.item()
+        if edge_loss: total_edge += edge_loss.item()
+        batch_count += 1
+
+        tracker.log_batch('train', loss.item(),
+                         mlm_loss.item() if mlm_loss else None,
+                         edge_loss.item() if edge_loss else None)
+
+        current_lr = optimizer.param_groups[0]['lr']
+        avg_loss = total_loss / batch_count
+        progress_bar.set_postfix({
+            'loss': f'{loss.item():.4f}',
+            'avg': f'{avg_loss:.4f}',
+            'mlm': f'{mlm_loss.item() if mlm_loss else 0:.4f}',
+            'edge': f'{edge_loss.item() if edge_loss else 0:.4f}',
+            'lr': f'{current_lr:.2e}'
+        })
+
+    return (total_loss / batch_count, total_mlm / batch_count, total_edge / batch_count)
+
+
+def validate(model, dataloader, device, tracker: PerformanceTracker, use_amp=False):
+    """Validation loop with loss tracking"""
+    model.eval()
+    total_loss = total_mlm = total_edge = 0
+    batch_count = 0
+    progress_bar = tqdm(dataloader, desc="Validation")
+
+    with torch.no_grad():
+        for batch in progress_bar:
+            if use_amp:
+                with torch.amp.autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
+                    loss, mlm_loss, edge_loss = model(
+                        input_ids=batch['input_ids'].to(device),
+                        attention_mask=batch['attention_mask'].to(device),
+                        position_ids=batch['position_ids'].to(device),
+                        labels=batch['labels'].to(device),
+                        edge_batch_idx=batch['edge_batch_idx'].to(device),
+                        edge_node1_pos=batch['edge_node1_pos'].to(device),
+                        edge_node2_pos=batch['edge_node2_pos'].to(device),
+                        edge_labels=batch['edge_labels'].to(device)
+                    )
+            else:
+                loss, mlm_loss, edge_loss = model(
+                    input_ids=batch['input_ids'].to(device),
+                    attention_mask=batch['attention_mask'].to(device),
+                    position_ids=batch['position_ids'].to(device),
+                    labels=batch['labels'].to(device),
+                    edge_batch_idx=batch['edge_batch_idx'].to(device),
+                    edge_node1_pos=batch['edge_node1_pos'].to(device),
+                    edge_node2_pos=batch['edge_node2_pos'].to(device),
+                    edge_labels=batch['edge_labels'].to(device)
+                )
+
             total_loss += loss.item()
             if mlm_loss: total_mlm += mlm_loss.item()
             if edge_loss: total_edge += edge_loss.item()
             batch_count += 1
 
-            # Log batch metrics
             tracker.log_batch('val', loss.item(),
                              mlm_loss.item() if mlm_loss else None,
                              edge_loss.item() if edge_loss else None)
 
+            avg_loss = total_loss / batch_count
+            progress_bar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'avg': f'{avg_loss:.4f}',
+                'mlm': f'{mlm_loss.item() if mlm_loss else 0:.4f}',
+                'edge': f'{edge_loss.item() if edge_loss else 0:.4f}'
+            })
+
     return (total_loss / batch_count, total_mlm / batch_count, total_edge / batch_count)
 
 
-"""
-Read configuration for training from config.json if available
-Sets device based on availability (MPS, CUDA, CPU)
-Initializes tokenizer, model, datasets, dataloaders, optimizer, and scheduler
-Runs training loop for specified epochs, saving best model based on validation loss
-Prints training configuration and progress
-SAVES ALL LOSSES AND PERFORMANCE METRICS TO JSON, CSV, AND SUMMARY
-"""
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Train GraphCodeBERT with Edge Prediction')
@@ -470,10 +501,12 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=None)
     parser.add_argument('--mlm_probability', type=float, default=None)
     parser.add_argument('--validation_split', type=float, default=None)
+    parser.add_argument('--weight_decay', type=float, default=0.01)
+    parser.add_argument('--early_stopping_patience', type=int, default=3)
+    parser.add_argument('--use_amp', action='store_true', help='Use mixed precision training')
 
     script_dir = Path(__file__).parent.absolute()
 
-    # Navigate up to repo root, then to config
     config_path = script_dir.parent.parent / 'GraphCodeBert/config.json'
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
@@ -485,24 +518,27 @@ def main():
     if torch.backends.mps.is_available():
         device = torch.device("mps")
         print("Using Apple Silicon GPU (MPS)")
+        use_amp = False
     elif torch.cuda.is_available():
         device = torch.device("cuda")
         print("Using NVIDIA GPU (CUDA)")
+        use_amp = args.use_amp
     else:
         device = torch.device("cpu")
         print("Using CPU")
+        use_amp = False
 
     output_path = script_dir.parent.parent / args.output_dir
     Path(output_path).mkdir(parents=True, exist_ok=True)
 
-    # Initialize performance tracker
-    tracker = PerformanceTracker(str(output_path))
+    tracker = PerformanceTracker(str(output_path), patience=args.early_stopping_patience)
 
+    print("Loading GraphCodeBERT base...")
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
     model = GraphCodeBERTWithEdgePrediction("microsoft/graphcodebert-base").to(device)
-    data_dir = Path(__file__).parent.absolute()
+    print("✓ Loaded GraphCodeBERT with dropout regularization")
 
-    # Navigate up to repo root, then to config
+    data_dir = Path(__file__).parent.absolute()
     data_path = data_dir.parent.parent / args.data_file
     full_dataset = GraphCodeBERTDataset(data_path, tokenizer, args.max_length)
     val_size = int(args.validation_split * len(full_dataset))
@@ -512,51 +548,70 @@ def main():
 
     collator = MLMWithEdgePredictionCollator(tokenizer, mlm_probability=args.mlm_probability)
     train_dl = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
-                         collate_fn=collator, num_workers=min(4, os.cpu_count() or 1))
-    val_dl = DataLoader(val_dataset, batch_size=args.batch_size,
-                       collate_fn=collator, num_workers=min(4, os.cpu_count() or 1))
+                         collate_fn=collator, num_workers=min(4, os.cpu_count() or 1),
+                         pin_memory=True)
+    val_dl = DataLoader(val_dataset, batch_size=args.batch_size * 2,
+                       collate_fn=collator, num_workers=min(4, os.cpu_count() or 1),
+                       pin_memory=True)
 
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate)
+    optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=args.warmup_steps,
         num_training_steps=len(train_dl) * args.epochs
     )
 
+    scaler = GradScaler() if use_amp else None
+
     print("\n--- Training Configuration ---")
     for k, v in vars(args).items(): print(f"  {k}: {v}")
+    print(f"  use_amp: {use_amp}")
+    print(f"  device: {device}")
     print("------------------------------\n")
 
-    best_val_loss = float('inf')
     for epoch in range(args.epochs):
-        print(f"\n{'=' * 20} Epoch {epoch + 1}/{args.epochs} {'=' * 20}")
+        print(f"\n{'=' * 70}")
+        print(f"Epoch {epoch + 1}/{args.epochs}")
+        print(f"{'=' * 70}")
 
-        train_loss, train_mlm, train_edge = train_epoch(model, train_dl, optimizer, scheduler, device, tracker)
-        val_loss, val_mlm, val_edge = validate(model, val_dl, device, tracker)
+        train_loss, train_mlm, train_edge = train_epoch(model, train_dl, optimizer, scheduler, device, tracker, scaler, use_amp)
+        val_loss, val_mlm, val_edge = validate(model, val_dl, device, tracker, use_amp)
 
-        # Get current learning rate
         current_lr = optimizer.param_groups[0]['lr']
 
-        # Log epoch metrics
         tracker.log_epoch(epoch, 'train', train_loss, train_mlm, train_edge, current_lr)
         tracker.log_epoch(epoch, 'val', val_loss, val_mlm, val_edge)
 
-        print(f"Train - Total: {train_loss:.4f}, MLM: {train_mlm:.4f}, Edge: {train_edge:.4f}")
-        print(f"Val   - Total: {val_loss:.4f}, MLM: {val_mlm:.4f}, Edge: {val_edge:.4f}")
-        print(f"Learning Rate: {current_lr:.2e}")
+        print(f"\n{'─' * 70}")
+        print(f"Epoch {epoch + 1} Results:")
+        print(f"  Train - Total: {train_loss:.6f}, MLM: {train_mlm:.6f}, Edge: {train_edge:.6f}")
+        print(f"  Val   - Total: {val_loss:.6f}, MLM: {val_mlm:.6f}, Edge: {val_edge:.6f}")
+        print(f"  Learning Rate: {current_lr:.6e}")
+        print(f"  Best Val Loss: {tracker.best_val_loss:.6f} (Epoch {tracker.history['best_epoch'] + 1 if tracker.history['best_epoch'] is not None else 'N/A'})")
+        print(f"  Patience:      {tracker.patience_counter}/{args.early_stopping_patience}")
+        print(f"{'─' * 70}")
 
         if tracker.update_best(val_loss, epoch):
-            best_val_loss = val_loss
             checkpoint_path = Path(args.output_dir) / "best_model"
-            print(f"New best model! Saving to {checkpoint_path}")
+            print(f"\n✓ New best model! Saving to {checkpoint_path}")
             model.save_pretrained(checkpoint_path)
             tokenizer.save_pretrained(checkpoint_path)
+        else:
+            print(f"\n⚠️  No improvement. Patience: {tracker.patience_counter}/{args.early_stopping_patience}")
 
-    print(f"\n{'=' * 15} Training complete! Best val loss: {best_val_loss:.4f} {'=' * 15}")
+        if tracker.should_stop_early():
+            print(f"\n⚠️  Early stopping triggered!")
+            print(f"   No improvement for {args.early_stopping_patience} epochs")
+            print(f"   Best loss: {tracker.best_val_loss:.6f} at epoch {tracker.history['best_epoch'] + 1}")
+            break
 
-    # Save all performance metrics
-    print("\n" + "="*50)
+    print(f"\n{'=' * 70}")
+    print(f"Training completed!")
+    print(f"Best val loss: {tracker.best_val_loss:.6f} at epoch {tracker.history['best_epoch'] + 1}")
+    print(f"{'=' * 70}\n")
+
+    print("="*70)
     print("SAVING PERFORMANCE METRICS...")
-    print("="*50)
+    print("="*70)
     tracker.save()
 
 
