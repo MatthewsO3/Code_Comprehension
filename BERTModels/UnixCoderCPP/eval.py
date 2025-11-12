@@ -163,6 +163,16 @@ class UniXcoderMLMEvaluator:
         for pos in mask_positions:
             masked_tokens[pos] = self.tokenizer.mask_token
 
+        # --- MODIFICATION START: Print Original and Masked Code ---
+        masked_code_display = self.tokenizer.convert_tokens_to_string(masked_tokens)
+
+
+       # print("\n" + "="*80 + "\nSNIPPET DETAILS:")
+       # print(f"\nOriginal Code:\n{code}")
+       # print(f"\nMasked Code:\n{masked_code_display}")
+       # print("\n" + "-"*80)
+        # --- MODIFICATION END ---
+
         # Prepare input: [CLS] tokens [SEP]
         input_tokens = [self.tokenizer.cls_token] + masked_tokens + [self.tokenizer.sep_token]
         input_ids = self.tokenizer.convert_tokens_to_ids(input_tokens)
@@ -209,6 +219,7 @@ class UniXcoderMLMEvaluator:
                     if rank == 1:
                         top1_correct += 1
                     break
+
 
             log_probs.append(np.log(correct_token_prob))
 

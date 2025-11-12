@@ -39,7 +39,7 @@ myvenv/
 *.idea
 graphcodebert-cpp-codesearch/
 data/
-
+unixcoder_cpp.jsonl
 MANIFEST
 data/
 
