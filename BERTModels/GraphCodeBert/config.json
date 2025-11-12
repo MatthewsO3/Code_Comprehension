@@ -50,7 +50,7 @@
     "learning_rate": 2e-5,
     "max_grad_norm": 1.0,
     "num_train_epochs": 8,
-    "warmup_steps": 150,,
+    "warmup_steps": 150,
     "code_length": 256,
     "nl_length": 128,
     "early_stopping_patience": 3,
