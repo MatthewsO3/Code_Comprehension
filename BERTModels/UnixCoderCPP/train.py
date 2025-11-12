@@ -278,7 +278,8 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-            scheduler.step()
+
+        scheduler.step()
 
         batch_loss = loss.item()
         total_loss += batch_loss
@@ -287,9 +288,12 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
         # Log batch metrics
         tracker.log_batch('train', batch_loss)
 
+        # Get current learning rate
+        current_lr = optimizer.param_groups[0]['lr']
+
         # Update progress bar
         avg_loss = total_loss / batch_count
-        progress_bar.set_postfix({'loss': batch_loss, 'avg': avg_loss})
+        progress_bar.set_postfix({'loss': f'{batch_loss:.4f}', 'avg': f'{avg_loss:.4f}', 'lr': f'{current_lr:.2e}'})
 
     return total_loss / batch_count
 
@@ -429,9 +433,9 @@ def main():
     print("------------------------------\n")
 
     for epoch in range(args.epochs):
-        print(f"\n{'=' * 60}")
+        print(f"\n{'=' * 70}")
         print(f"Epoch {epoch + 1}/{args.epochs}")
-        print(f"{'=' * 60}")
+        print(f"{'=' * 70}")
 
         train_loss = train_epoch(model, train_dl, optimizer, scheduler, device, tracker, scaler, use_amp)
         val_loss = validate(model, val_dl, device, tracker, use_amp)
@@ -440,10 +444,14 @@ def main():
         tracker.log_epoch(epoch, 'train', train_loss, current_lr)
         tracker.log_epoch(epoch, 'val', val_loss)
 
-        print(f"\nEpoch {epoch + 1} Results:")
-        print(f"  Train Loss: {train_loss:.4f}")
-        print(f"  Val Loss:   {val_loss:.4f}")
-        print(f"  Learning Rate: {current_lr:.2e}")
+        print(f"\n{'─' * 70}")
+        print(f"Epoch {epoch + 1} Results:")
+        print(f"  Train Loss:     {train_loss:.6f}")
+        print(f"  Val Loss:       {val_loss:.6f}")
+        print(f"  Learning Rate:  {current_lr:.6e}")
+        print(f"  Best Val Loss:  {tracker.best_val_loss:.6f} (Epoch {tracker.history['best_epoch'] + 1 if tracker.history['best_epoch'] is not None else 'N/A'})")
+        print(f"  Patience:       {tracker.patience_counter}/{args.early_stopping_patience}")
+        print(f"{'─' * 70}")
 
         if val_loss < tracker.best_val_loss:
             checkpoint_path = Path(args.output_dir) / "best_model"
@@ -452,7 +460,9 @@ def main():
             tokenizer.save_pretrained(checkpoint_path)
 
         if tracker.should_stop_early(val_loss, epoch):
-            print(f"\n⚠️ Early stopping triggered! No improvement for {args.early_stopping_patience} epochs.")
+            print(f"\n⚠️  Early stopping triggered!")
+            print(f"   No improvement for {args.early_stopping_patience} epochs")
+            print(f"   Best loss: {tracker.best_val_loss:.6f} at epoch {tracker.history['best_epoch'] + 1}")
             break
 
     print(f"\n{'=' * 60}")
