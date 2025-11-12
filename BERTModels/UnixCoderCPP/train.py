@@ -2,6 +2,7 @@
 Train UniXcoder on MLM task for C++ code - OPTIMIZED VERSION.
 Includes early stopping, dropout, learning rate warmup, mixed precision,
 and overfitting prevention techniques.
+WITH COMPREHENSIVE LOSS AND PERFORMANCE TRACKING
 """
 import os
 import json
@@ -44,7 +45,7 @@ set_seed(42)
 # ============================================================================
 
 class PerformanceTracker:
-    """Tracks metrics with early stopping support."""
+    """Tracks metrics with early stopping support and batch-level logging."""
     def __init__(self, output_dir: str, patience: int = 3):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -55,11 +56,20 @@ class PerformanceTracker:
         self.history = {
             'epoch': [],
             'train_loss': [],
+            'train_batch_losses': [],
             'val_loss': [],
+            'val_batch_losses': [],
             'learning_rate': [],
             'best_val_loss': None,
             'best_epoch': None,
         }
+
+    def log_batch(self, phase: str, loss):
+        """Log individual batch metrics."""
+        if phase == 'train':
+            self.history['train_batch_losses'].append(loss)
+        else:
+            self.history['val_batch_losses'].append(loss)
 
     def log_epoch(self, epoch: int, phase: str, loss, lr=None):
         """Log epoch-level metrics."""
@@ -92,6 +102,13 @@ class PerformanceTracker:
             json.dump(self.history, f, indent=2)
         print(f"✓ Saved training history to {history_path}")
 
+        # Save summary
+        summary = self._compute_summary()
+        summary_path = self.output_dir / 'training_summary.json'
+        with open(summary_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        print(f"✓ Saved training summary to {summary_path}")
+
         try:
             import csv
             csv_path = self.output_dir / 'training_metrics.csv'
@@ -108,6 +125,22 @@ class PerformanceTracker:
             print(f"✓ Saved metrics CSV to {csv_path}")
         except Exception as e:
             print(f"⚠️ Could not save CSV: {e}")
+
+    def _compute_summary(self) -> Dict:
+        """Compute summary statistics."""
+        return {
+            'total_epochs': len(self.history['epoch']),
+            'best_epoch': self.history['best_epoch'],
+            'best_val_loss': self.history['best_val_loss'],
+            'final_train_loss': self.history['train_loss'][-1] if self.history['train_loss'] else None,
+            'final_val_loss': self.history['val_loss'][-1] if self.history['val_loss'] else None,
+            'min_train_loss': min(self.history['train_loss']) if self.history['train_loss'] else None,
+            'min_val_loss': min(self.history['val_loss']) if self.history['val_loss'] else None,
+            'total_batches_train': len(self.history['train_batch_losses']),
+            'total_batches_val': len(self.history['val_batch_losses']),
+            'avg_batch_loss_train': np.mean(self.history['train_batch_losses']) if self.history['train_batch_losses'] else None,
+            'std_batch_loss_train': np.std(self.history['train_batch_losses']) if self.history['train_batch_losses'] else None,
+        }
 
 
 # ============================================================================
@@ -212,13 +245,14 @@ class MLMCollator:
 # Training and Validation
 # ============================================================================
 
-def train_epoch(model, dataloader, optimizer, scheduler, device, scaler, use_amp=False):
-    """Train for one epoch with mixed precision support."""
+def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: PerformanceTracker, scaler, use_amp=False):
+    """Train for one epoch with mixed precision support and loss tracking."""
     model.train()
     total_loss = 0
     batch_count = 0
+    progress_bar = tqdm(dataloader, desc="Training")
 
-    for batch in tqdm(dataloader, desc="Training"):
+    for batch in progress_bar:
         optimizer.zero_grad()
 
         if use_amp:
@@ -246,20 +280,29 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, scaler, use_amp
             optimizer.step()
             scheduler.step()
 
-        total_loss += loss.item()
+        batch_loss = loss.item()
+        total_loss += batch_loss
         batch_count += 1
+
+        # Log batch metrics
+        tracker.log_batch('train', batch_loss)
+
+        # Update progress bar
+        avg_loss = total_loss / batch_count
+        progress_bar.set_postfix({'loss': batch_loss, 'avg': avg_loss})
 
     return total_loss / batch_count
 
 
-def validate(model, dataloader, device, use_amp=False):
-    """Validate the model."""
+def validate(model, dataloader, device, tracker: PerformanceTracker, use_amp=False):
+    """Validate the model with loss tracking."""
     model.eval()
     total_loss = 0
     batch_count = 0
+    progress_bar = tqdm(dataloader, desc="Validation")
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Validation"):
+        for batch in progress_bar:
             if use_amp:
                 with torch.amp.autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
                     outputs = model(
@@ -274,8 +317,16 @@ def validate(model, dataloader, device, use_amp=False):
                     labels=batch['labels'].to(device)
                 )
 
-            total_loss += outputs.loss.item()
+            batch_loss = outputs.loss.item()
+            total_loss += batch_loss
             batch_count += 1
+
+            # Log batch metrics
+            tracker.log_batch('val', batch_loss)
+
+            # Update progress bar
+            avg_loss = total_loss / batch_count
+            progress_bar.set_postfix({'loss': batch_loss, 'avg': avg_loss})
 
     return total_loss / batch_count
 
@@ -378,21 +429,25 @@ def main():
     print("------------------------------\n")
 
     for epoch in range(args.epochs):
-        print(f"\n{'=' * 20} Epoch {epoch + 1}/{args.epochs} {'=' * 20}")
+        print(f"\n{'=' * 60}")
+        print(f"Epoch {epoch + 1}/{args.epochs}")
+        print(f"{'=' * 60}")
 
-        train_loss = train_epoch(model, train_dl, optimizer, scheduler, device, scaler, use_amp)
-        val_loss = validate(model, val_dl, device, use_amp)
+        train_loss = train_epoch(model, train_dl, optimizer, scheduler, device, tracker, scaler, use_amp)
+        val_loss = validate(model, val_dl, device, tracker, use_amp)
 
         current_lr = optimizer.param_groups[0]['lr']
         tracker.log_epoch(epoch, 'train', train_loss, current_lr)
         tracker.log_epoch(epoch, 'val', val_loss)
 
-        print(f"Train Loss: {train_loss:.4f} | Validation Loss: {val_loss:.4f}")
-        print(f"Learning Rate: {current_lr:.2e}")
+        print(f"\nEpoch {epoch + 1} Results:")
+        print(f"  Train Loss: {train_loss:.4f}")
+        print(f"  Val Loss:   {val_loss:.4f}")
+        print(f"  Learning Rate: {current_lr:.2e}")
 
         if val_loss < tracker.best_val_loss:
             checkpoint_path = Path(args.output_dir) / "best_model"
-            print(f"✓ New best model! Saving to {checkpoint_path}")
+            print(f"\n✓ New best model! Saving to {checkpoint_path}")
             model.save_pretrained(checkpoint_path)
             tokenizer.save_pretrained(checkpoint_path)
 
@@ -400,7 +455,15 @@ def main():
             print(f"\n⚠️ Early stopping triggered! No improvement for {args.early_stopping_patience} epochs.")
             break
 
-    print(f"\n{'=' * 15} Training complete! Best val loss: {tracker.best_val_loss:.4f} {'=' * 15}")
+    print(f"\n{'=' * 60}")
+    print(f"Training completed!")
+    print(f"Best val loss: {tracker.best_val_loss:.4f} at epoch {tracker.history['best_epoch']}")
+    print(f"{'=' * 60}\n")
+
+    # Save all performance metrics
+    print("="*60)
+    print("SAVING PERFORMANCE METRICS...")
+    print("="*60)
     tracker.save()
 
 
