@@ -2,11 +2,11 @@
 EVALUATION RESULTS: GraphCodeBERT
 ======================================================================
 
-Total masked tokens: 540
+Total masked tokens: 60010
 Mask ratio: 0.2
 
-Top-1 Accuracy:  0.8519 (460/540)
-Top-5 Accuracy:  0.9278 (501/540)
-Top-10 Accuracy: 0.9426 (509/540)
-Perplexity:      4.7865
+Top-1 Accuracy:  0.8619 (51720/60010)
+Top-5 Accuracy:  0.9387 (56332/60010)
+Top-10 Accuracy: 0.9526 (57168/60010)
+Perplexity:      3.6903
 ======================================================================

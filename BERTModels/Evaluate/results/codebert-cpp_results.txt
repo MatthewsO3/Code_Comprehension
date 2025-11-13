@@ -2,11 +2,11 @@
 EVALUATION RESULTS: CodeBERT-cpp
 ======================================================================
 
-Total masked tokens: 540
+Total masked tokens: 60099
 Mask ratio: 0.2
 
-Top-1 Accuracy:  0.9241 (499/540)
-Top-5 Accuracy:  0.9667 (522/540)
-Top-10 Accuracy: 0.9741 (526/540)
-Perplexity:      2.0551
+Top-1 Accuracy:  0.9207 (55332/60099)
+Top-5 Accuracy:  0.9697 (58280/60099)
+Top-10 Accuracy: 0.9774 (58738/60099)
+Perplexity:      1.9976
 ======================================================================

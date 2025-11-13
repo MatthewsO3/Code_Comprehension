@@ -2,11 +2,11 @@
 EVALUATION RESULTS: UniXcoder
 ======================================================================
 
-Total masked tokens: 478
+Total masked tokens: 53243
 Mask ratio: 0.2
 
-Top-1 Accuracy:  0.7929 (379/478)
-Top-5 Accuracy:  0.9017 (431/478)
-Top-10 Accuracy: 0.9205 (440/478)
-Perplexity:      8.9831
+Top-1 Accuracy:  0.8962 (47714/53243)
+Top-5 Accuracy:  0.9554 (50871/53243)
+Top-10 Accuracy: 0.9664 (51452/53243)
+Perplexity:      2.5838
 ======================================================================

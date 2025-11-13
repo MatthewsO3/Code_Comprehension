@@ -31,8 +31,8 @@ print("✓ Tree-sitter initialized")
 repo_dir = Path(__file__).parent.parent.absolute()
 print("repo dir: ", repo_dir)
 # Navigate up to repo root, then to config
-graph_path = repo_dir / 'GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config/best_model'
-unix_path = repo_dir / 'UnixCoderCPP/unixcoder-cpp-mlm/best_model'
+graph_path = "/home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config/best_model"
+unix_path = "/home/mczap/code_comp/Code_Comprehension/BERTModels/UnixCoderCPP/unixcoder-cpp-mlm/best_model"
 code_path = 'neulab/codebert-cpp'
 
 # Load tokenizers for each model
@@ -328,7 +328,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--num_samples',
         type=int,
-        default=10000,
+        default=1000,
         help='Number of samples to process (each file will have exactly this many records)'
     )
 
