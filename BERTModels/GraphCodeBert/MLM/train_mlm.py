@@ -442,7 +442,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
                     loss, mlm_loss, edge_loss = model(
                         input_ids=batch['input_ids'].to(device),
                         attention_mask=batch['attention_mask'].to(device),
-                        position_ids=batch['position_idx'].to(device),
+                        position_ids=batch['position_ids'].to(device),
                         labels=batch['labels'].to(device),
                         edge_batch_idx=batch['edge_batch_idx'].to(device),
                         edge_node1_pos=batch['edge_node1_pos'].to(device),
@@ -458,7 +458,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
                 loss, mlm_loss, edge_loss = model(
                     input_ids=batch['input_ids'].to(device),
                     attention_mask=batch['attention_mask'].to(device),
-                    position_ids=batch['position_idx'].to(device),
+                    position_ids=batch['position_ids'].to(device),
                     labels=batch['labels'].to(device),
                     edge_batch_idx=batch['edge_batch_idx'].to(device),
                     edge_node1_pos=batch['edge_node1_pos'].to(device),
