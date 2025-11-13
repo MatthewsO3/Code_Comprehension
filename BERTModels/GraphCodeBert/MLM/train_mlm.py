@@ -189,6 +189,7 @@ class GraphCodeBERTDataset(Dataset):
         adj = defaultdict(list)
         dfg_nodes, node_to_idx = [], {}
 
+        # Extract DFG relationships
         for var, use_pos, _, _, dep_pos_list in dfg:
             if use_pos not in node_to_idx:
                 node_to_idx[use_pos] = len(dfg_nodes)
@@ -199,41 +200,76 @@ class GraphCodeBERTDataset(Dataset):
                     dfg_nodes.append((var, def_pos))
                 adj[node_to_idx[use_pos]].append(node_to_idx[def_pos])
 
-        max_code_len = self.max_length - len(dfg_nodes) - 3
+        # Calculate max code length considering DFG nodes
+        # Format: [CLS] + code_tokens + [SEP] + dfg_tokens + [SEP]
+        dfg_token_count = len(dfg_nodes)
+        max_code_len = self.max_length - dfg_token_count - 3  # 3 for [CLS], [SEP], [SEP]
+
         if len(code_tokens) > max_code_len:
             code_tokens = code_tokens[:max_code_len]
 
+        # Build token sequence
         tokens = [self.tokenizer.cls_token] + code_tokens + [self.tokenizer.sep_token]
         dfg_start_pos = len(tokens)
-        tokens.extend([self.tokenizer.unk_token] * len(dfg_nodes))
+        tokens.extend([self.tokenizer.unk_token] * dfg_token_count)
         tokens.append(self.tokenizer.sep_token)
 
+        # Convert tokens to IDs
         input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
-        position_idx = list(range(len(code_tokens) + 2)) + [0] * len(dfg_nodes) + [len(code_tokens) + 2]
+        position_idx = list(range(len(code_tokens) + 2)) + [0] * dfg_token_count + [len(code_tokens) + 2]
 
-        attn_mask = np.zeros((self.max_length, self.max_length), dtype=bool)
+        # Pad to max_length
+        padding_len = self.max_length - len(input_ids)
+        if padding_len < 0:
+            raise ValueError(
+                f"Sequence too long! {len(tokens)} tokens > {self.max_length} max_length. "
+                f"Code tokens: {len(code_tokens)}, DFG nodes: {dfg_token_count}"
+            )
+
+        input_ids.extend([self.tokenizer.pad_token_id] * padding_len)
+        position_idx.extend([0] * padding_len)
+
+        # Build attention mask
+        # According to GraphCodeBERT paper:
+        # 1. Code tokens can attend to all code tokens (including code representation in DFG)
+        # 2. DFG nodes attend to related code positions and other DFG nodes
+        attn_mask = np.zeros((self.max_length, self.max_length), dtype=np.bool_)
         code_len = len(code_tokens) + 2
+
+        # Code section attends to code section
         attn_mask[:code_len, :code_len] = True
+
+        # Each token attends to itself
         for i in range(len(tokens)):
             attn_mask[i, i] = True
+
+        # DFG nodes attend to their corresponding code positions
         for i, (_, code_pos) in enumerate(dfg_nodes):
             if code_pos + 1 < code_len:
                 dfg_abs = dfg_start_pos + i
                 code_abs = code_pos + 1
-                attn_mask[dfg_abs, code_abs] = attn_mask[code_abs, dfg_abs] = True
+                attn_mask[dfg_abs, code_abs] = True
+                attn_mask[code_abs, dfg_abs] = True
+
+        # DFG edges: nodes attend to their dependencies
         for i, adjs in adj.items():
             for j in adjs:
                 u, v = dfg_start_pos + i, dfg_start_pos + j
-                attn_mask[u, v] = attn_mask[v, u] = True
+                attn_mask[u, v] = True
+                attn_mask[v, u] = True
 
-        padding_len = self.max_length - len(input_ids)
-        input_ids.extend([self.tokenizer.pad_token_id] * padding_len)
-        position_idx.extend([0] * padding_len)
+        # Validate shapes
+        assert len(input_ids) == self.max_length, \
+            f"Input IDs length {len(input_ids)} != max_length {self.max_length}"
+        assert len(position_idx) == self.max_length, \
+            f"Position indices length {len(position_idx)} != max_length {self.max_length}"
+        assert attn_mask.shape == (self.max_length, self.max_length), \
+            f"Attention mask shape {attn_mask.shape} != ({self.max_length}, {self.max_length})"
 
         return {
-            'input_ids': torch.tensor(input_ids),
-            'attention_mask': torch.tensor(attn_mask),
-            'position_idx': torch.tensor(position_idx),
+            'input_ids': torch.tensor(input_ids, dtype=torch.long),
+            'attention_mask': torch.tensor(attn_mask, dtype=torch.bool),
+            'position_idx': torch.tensor(position_idx, dtype=torch.long),
             'dfg_info': {
                 'nodes': dfg_nodes,
                 'edges': [(i, j) for i, adjs in adj.items() for j in adjs]
@@ -301,16 +337,30 @@ class MLMWithEdgePredictionCollator:
     edge_sample_ratio: float = 0.3
 
     def __call__(self, examples: List[Dict]) -> Dict[str, torch.Tensor]:
+        batch_size = len(examples)
+        # Get max_length from first example's input_ids
+        max_seq_length = examples[0]['input_ids'].shape[0]
+
         input_ids = torch.stack([ex['input_ids'] for ex in examples])
         attn_mask = torch.stack([ex['attention_mask'] for ex in examples])
         pos_idx = torch.stack([ex['position_idx'] for ex in examples])
 
+        # Verify batch dimensions match actual max_length
+        assert input_ids.shape == (batch_size, max_seq_length), \
+            f"Input IDs batch shape error: {input_ids.shape} vs expected {(batch_size, max_seq_length)}"
+        assert attn_mask.shape == (batch_size, max_seq_length, max_seq_length), \
+            f"Attention mask batch shape error: {attn_mask.shape} vs expected {(batch_size, max_seq_length, max_seq_length)}"
+        assert pos_idx.shape == (batch_size, max_seq_length), \
+            f"Position indices batch shape error: {pos_idx.shape} vs expected {(batch_size, max_seq_length)}"
+
         # MLM masking
         labels, masked_ids = input_ids.clone(), input_ids.clone()
-        for i in range(len(examples)):
+        for i in range(batch_size):
             code_indices = (pos_idx[i] > 1).nonzero(as_tuple=True)[0]
-            if len(code_indices) > 1: code_indices = code_indices[:-1]
-            if len(code_indices) == 0: continue
+            if len(code_indices) > 1:
+                code_indices = code_indices[:-1]
+            if len(code_indices) == 0:
+                continue
             num_mask = max(1, int(len(code_indices) * self.mlm_probability))
             mask_pos = code_indices[torch.randperm(len(code_indices))[:num_mask]]
             for pos in mask_pos:
@@ -326,11 +376,13 @@ class MLMWithEdgePredictionCollator:
         # Edge prediction
         edge_pairs = []
         max_pairs = 20
-        for i in range(len(examples)):
-            if 'dfg_info' not in examples[i]: continue
+        for i in range(batch_size):
+            if 'dfg_info' not in examples[i]:
+                continue
             dfg_nodes = examples[i]['dfg_info']['nodes']
             dfg_edges = examples[i]['dfg_info']['edges']
-            if len(dfg_nodes) < 2: continue
+            if len(dfg_nodes) < 2:
+                continue
 
             edge_set = set(dfg_edges)
             edge_set.update((v, u) for u, v in dfg_edges)
@@ -357,16 +409,20 @@ class MLMWithEdgePredictionCollator:
             edge_node2_pos = torch.tensor([p[2] for p in edge_pairs], dtype=torch.long)
             edge_labels = torch.tensor([p[3] for p in edge_pairs], dtype=torch.float)
         else:
-            edge_batch_idx = torch.zeros(0, dtype=torch.long)
-            edge_node1_pos = torch.zeros(0, dtype=torch.long)
-            edge_node2_pos = torch.zeros(0, dtype=torch.long)
-            edge_labels = torch.zeros(0, dtype=torch.float)
+            edge_batch_idx = torch.tensor([], dtype=torch.long)
+            edge_node1_pos = torch.tensor([], dtype=torch.long)
+            edge_node2_pos = torch.tensor([], dtype=torch.long)
+            edge_labels = torch.tensor([], dtype=torch.float)
 
         return {
-            'input_ids': masked_ids, 'attention_mask': attn_mask,
-            'position_ids': pos_idx, 'labels': labels,
-            'edge_batch_idx': edge_batch_idx, 'edge_node1_pos': edge_node1_pos,
-            'edge_node2_pos': edge_node2_pos, 'edge_labels': edge_labels
+            'input_ids': masked_ids,
+            'attention_mask': attn_mask,
+            'position_ids': pos_idx,
+            'labels': labels,
+            'edge_batch_idx': edge_batch_idx,
+            'edge_node1_pos': edge_node1_pos,
+            'edge_node2_pos': edge_node2_pos,
+            'edge_labels': edge_labels
         }
 
 
