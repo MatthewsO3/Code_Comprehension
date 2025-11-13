@@ -427,7 +427,7 @@ class MLMWithEdgePredictionCollator:
 
 
 def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: PerformanceTracker, scaler, use_amp=False):
-    """Training loop with loss tracking and mixed precision support"""
+    """Training loop with memory management and loss tracking"""
     model.train()
     total_loss = total_mlm = total_edge = 0
     batch_count = 0
@@ -436,58 +436,80 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
     for batch in progress_bar:
         optimizer.zero_grad()
 
-        if use_amp:
-            with torch.amp.autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
+        try:
+            if use_amp:
+                with torch.amp.autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
+                    loss, mlm_loss, edge_loss = model(
+                        input_ids=batch['input_ids'].to(device),
+                        attention_mask=batch['attention_mask'].to(device),
+                        position_ids=batch['position_idx'].to(device),
+                        labels=batch['labels'].to(device),
+                        edge_batch_idx=batch['edge_batch_idx'].to(device),
+                        edge_node1_pos=batch['edge_node1_pos'].to(device),
+                        edge_node2_pos=batch['edge_node2_pos'].to(device),
+                        edge_labels=batch['edge_labels'].to(device)
+                    )
+
+                scaler.scale(loss).backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
                 loss, mlm_loss, edge_loss = model(
                     input_ids=batch['input_ids'].to(device),
                     attention_mask=batch['attention_mask'].to(device),
-                    position_ids=batch['position_ids'].to(device),
+                    position_ids=batch['position_idx'].to(device),
                     labels=batch['labels'].to(device),
                     edge_batch_idx=batch['edge_batch_idx'].to(device),
                     edge_node1_pos=batch['edge_node1_pos'].to(device),
                     edge_node2_pos=batch['edge_node2_pos'].to(device),
                     edge_labels=batch['edge_labels'].to(device)
                 )
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
 
-            scaler.scale(loss).backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss, mlm_loss, edge_loss = model(
-                input_ids=batch['input_ids'].to(device),
-                attention_mask=batch['attention_mask'].to(device),
-                position_ids=batch['position_ids'].to(device),
-                labels=batch['labels'].to(device),
-                edge_batch_idx=batch['edge_batch_idx'].to(device),
-                edge_node1_pos=batch['edge_node1_pos'].to(device),
-                edge_node2_pos=batch['edge_node2_pos'].to(device),
-                edge_labels=batch['edge_labels'].to(device)
-            )
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            scheduler.step()
 
-        scheduler.step()
+            total_loss += loss.item()
+            if mlm_loss: total_mlm += mlm_loss.item()
+            if edge_loss: total_edge += edge_loss.item()
+            batch_count += 1
 
-        total_loss += loss.item()
-        if mlm_loss: total_mlm += mlm_loss.item()
-        if edge_loss: total_edge += edge_loss.item()
-        batch_count += 1
+            tracker.log_batch('train', loss.item(),
+                             mlm_loss.item() if mlm_loss else None,
+                             edge_loss.item() if edge_loss else None)
 
-        tracker.log_batch('train', loss.item(),
-                         mlm_loss.item() if mlm_loss else None,
-                         edge_loss.item() if edge_loss else None)
+            current_lr = optimizer.param_groups[0]['lr']
+            avg_loss = total_loss / batch_count
+            progress_bar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'avg': f'{avg_loss:.4f}',
+                'mlm': f'{mlm_loss.item() if mlm_loss else 0:.4f}',
+                'edge': f'{edge_loss.item() if edge_loss else 0:.4f}',
+                'lr': f'{current_lr:.2e}'
+            })
 
-        current_lr = optimizer.param_groups[0]['lr']
-        avg_loss = total_loss / batch_count
-        progress_bar.set_postfix({
-            'loss': f'{loss.item():.4f}',
-            'avg': f'{avg_loss:.4f}',
-            'mlm': f'{mlm_loss.item() if mlm_loss else 0:.4f}',
-            'edge': f'{edge_loss.item() if edge_loss else 0:.4f}',
-            'lr': f'{current_lr:.2e}'
-        })
+        except RuntimeError as e:
+            if 'out of memory' in str(e).lower():
+                print(f"\n⚠️ OUT OF MEMORY ERROR!")
+                print(f"   Batch size: {batch['input_ids'].shape[0]}")
+                print(f"   Sequence length: {batch['input_ids'].shape[1]}")
+                print(f"   Estimated batch memory: ~{batch['input_ids'].shape[0] * batch['input_ids'].shape[1]**2 / 1e6:.0f}MB for attention alone")
+                print(f"   Try reducing batch_size or max_length")
+                raise
+            else:
+                raise
+
+        finally:
+            # Clear GPU cache after each batch
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
+            elif device.type == 'mps':
+                torch.mps.empty_cache()
+
+            # Delete batch to free memory
+            del batch
 
     return (total_loss / batch_count, total_mlm / batch_count, total_edge / batch_count)
 
@@ -624,18 +646,42 @@ def main():
     print(f"  device: {device}")
     print("------------------------------\n")
 
+    # Enable gradient checkpointing to save memory
+    if hasattr(model.roberta_mlm, 'gradient_checkpointing_enable'):
+        model.roberta_mlm.gradient_checkpointing_enable()
+        print("✓ Gradient checkpointing enabled (trades compute for memory)")
+
     for epoch in range(args.epochs):
         print(f"\n{'=' * 70}")
         print(f"Epoch {epoch + 1}/{args.epochs}")
         print(f"{'=' * 70}")
 
+        # Clear cache before epoch
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+        elif device.type == 'mps':
+            torch.mps.empty_cache()
+
         train_loss, train_mlm, train_edge = train_epoch(model, train_dl, optimizer, scheduler, device, tracker, scaler, use_amp)
+
+        # Clear cache before validation
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+        elif device.type == 'mps':
+            torch.mps.empty_cache()
+
         val_loss, val_mlm, val_edge = validate(model, val_dl, device, tracker, use_amp)
 
         current_lr = optimizer.param_groups[0]['lr']
 
         tracker.log_epoch(epoch, 'train', train_loss, train_mlm, train_edge, current_lr)
         tracker.log_epoch(epoch, 'val', val_loss, val_mlm, val_edge)
+
+        # Memory stats
+        if device.type == 'cuda':
+            peak_mem = torch.cuda.max_memory_allocated() / 1024**3
+            print(f"\n  Peak GPU Memory: {peak_mem:.2f} GB")
 
         print(f"\n{'─' * 70}")
         print(f"Epoch {epoch + 1} Results:")
