@@ -1,11 +1,13 @@
 {
-  "total_epochs": 2,
-  "best_epoch": 1,
-  "best_val_loss": 40.94099950790405,
-  "final_train_loss": 40.372862882392354,
-  "final_val_loss": 40.94099950790405,
-  "min_train_loss": 36.140213833298795,
-  "min_val_loss": 40.94099950790405,
-  "total_batches_train": 86,
-  "total_batches_val": 16
+  "total_epochs": 10,
+  "best_epoch": 9,
+  "best_val_loss": 0.4745487853632135,
+  "final_train_loss": 0.46397121637454153,
+  "final_val_loss": 0.4745487853632135,
+  "min_train_loss": 0.46397121637454153,
+  "min_val_loss": 0.4745487853632135,
+  "total_batches_train": 13290,
+  "total_batches_val": 1180,
+  "avg_batch_loss_train": 0.6803641792725943,
+  "std_batch_loss_train": 0.7245692977762253
 }
