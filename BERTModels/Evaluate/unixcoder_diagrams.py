@@ -30,6 +30,8 @@ def plot_total_loss(history: dict, save_path: str = None):
     fig, ax = plt.subplots(figsize=(12, 6))
 
     epochs = history['epoch']
+    for epoch in range(len(epochs)):
+        epochs[epoch] += 1
     train_loss = history['train_loss']
     val_loss = history['val_loss']
 
