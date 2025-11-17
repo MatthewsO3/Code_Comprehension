@@ -25,6 +25,7 @@ class CodeDataset(Dataset):
         self.tokenizer = tokenizer
         self.code_snippets = []
         self.docstrings = []
+        self.is_distractor = []  # Track which are distractors
 
         with open(file_path) as f:
             for line in f:
@@ -38,6 +39,19 @@ class CodeDataset(Dataset):
                 # Handle both possible docstring keys
                 doc_key = 'positive' if 'positive' in js else 'good_docstring'
                 self.docstrings.append(js[doc_key])
+                self.is_distractor.append(False)  # Ground truth items
+
+    def add_distractors(self, distractor_file_path):
+        """Add distractor code snippets to the dataset."""
+        with open(distractor_file_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                js = json.loads(line)
+                self.code_snippets.append(js['code'])
+                self.docstrings.append("(distractor - no docstring)")
+                self.is_distractor.append(True)
 
     def __len__(self):
         return len(self.code_snippets)
@@ -98,6 +112,17 @@ def get_code_embeddings(model, tokenizer, args):
     model.eval()
 
     dataset = CodeDataset(tokenizer, args, args.eval_data_file)
+
+    # Load distractors if available
+    num_gt = len(dataset.code_snippets)
+    if os.path.exists(args.distractor_data_file):
+        print(f"Loading distractors from {args.distractor_data_file}...")
+        dataset.add_distractors(args.distractor_data_file)
+        num_distract = len(dataset.code_snippets) - num_gt
+        print(f"Loaded {num_gt} ground truth + {num_distract} distractors = {len(dataset.code_snippets)} total")
+    else:
+        print(f"Loaded {num_gt} ground truth code snippets (no distractors found)")
+
     dataloader = DataLoader(
         dataset,
         sampler=SequentialSampler(dataset),
@@ -118,11 +143,11 @@ def get_code_embeddings(model, tokenizer, args):
 
     code_vecs = np.concatenate(code_vecs, axis=0)
 
-    return code_vecs, dataset.code_snippets, dataset.docstrings
+    return code_vecs, dataset.code_snippets, dataset.docstrings, dataset.is_distractor
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Manual Code Search')
+    parser = argparse.ArgumentParser(description='Manual Code Search with Distractors')
 
     # Load config for defaults
     script_dir = Path(__file__).parent.parent.absolute()
@@ -139,8 +164,9 @@ def main():
 
     # --- Set sensible defaults from config or hardcode them ---
     default_model_path = script_dir / (
-                codesearch_config.get('output_dir', 'CodeSearch/graphcodebert-cpp-codesearch') + '/best_model')
+            codesearch_config.get('output_dir', 'CodeSearch/graphcodebert-cpp-codesearch') + '/best_model')
     default_eval_file = script_dir / eval_config.get('eval_data_file', 'data/eval.jsonl')
+    default_distractor_file = script_dir / eval_config.get('distractor_data_file', 'data/distractors.jsonl')
     default_code_len = codesearch_config.get('code_length', 256)
     default_nl_len = codesearch_config.get('nl_length', 128)
     default_batch_size = codesearch_config.get('eval_batch_size', 32)
@@ -149,6 +175,8 @@ def main():
                         help="Path to trained model checkpoint")
     parser.add_argument("--eval_data_file", type=str, default=default_eval_file,
                         help="Evaluation data file (JSONL)")
+    parser.add_argument("--distractor_data_file", type=str, default=default_distractor_file,
+                        help="Distractor code snippets file (JSONL, optional)")
     parser.add_argument("--code_length", type=int, default=default_code_len,
                         help="Max code length")
     parser.add_argument("--nl_length", type=int, default=default_nl_len,
@@ -187,9 +215,9 @@ def main():
         print(f"Error: Eval data file not found: {args.eval_data_file}")
         return
 
-    code_embeddings, code_snippets, docstrings = get_code_embeddings(model, tokenizer, args)
+    code_embeddings, code_snippets, docstrings, is_distractor = get_code_embeddings(model, tokenizer, args)
 
-    print(f"\nModel and {len(code_snippets)} code snippets loaded. Ready for search.")
+    print(f"\nModel loaded. Ready for search with {len(code_snippets)} code snippets.")
     print("=" * 60)
 
     # --- Interactive Search Loop ---
@@ -213,14 +241,15 @@ def main():
             # [0] is to get the results for our single query
             top_k_indices = np.argsort(-scores[0])[:args.top_k]
 
-            print("\n--- Top {args.top_k} Results ---")
+            print(f"\n--- Top {args.top_k} Results ---")
 
             # 4. Print results
             for i, idx in enumerate(top_k_indices):
-                print(f"\nRank {i + 1} (Score: {scores[0, idx]:.4f})")
-                print("-" * 20)
-                print(f"Original Docstring:\n{docstrings[idx]}\n")
-                print(f"Found Code:\n{code_snippets[idx]}\n")
+                result_type = "[DISTRACTOR]" if is_distractor[idx] else "[GROUND TRUTH]"
+                print(f"\nRank {i + 1} - {result_type} (Score: {scores[0, idx]:.4f})")
+                print("-" * 60)
+                print(f"Docstring:\n{docstrings[idx]}\n")
+                print(f"Code:\n{code_snippets[idx]}\n")
                 print("-" * 60)
 
         except KeyboardInterrupt:
