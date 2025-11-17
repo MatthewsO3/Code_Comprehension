@@ -1,5 +1,5 @@
 """
-Train UniXcoder on MLM task for C++ code - OPTIMIZED VERSION.
+Train UniXcoder on MLM task for C++ code
 Includes early stopping, dropout, learning rate warmup, mixed precision,
 and overfitting prevention techniques.
 WITH COMPREHENSIVE LOSS AND PERFORMANCE TRACKING
