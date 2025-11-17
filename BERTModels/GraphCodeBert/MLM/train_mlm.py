@@ -648,7 +648,7 @@ def main():
 
     # Enable gradient checkpointing to save memory
     if hasattr(model.roberta_mlm, 'gradient_checkpointing_enable'):
-        model.roberta_mlm.gradient_checkpointing_enable()
+        # model.roberta_mlm.gradient_checkpointing_enable()
         print("✓ Gradient checkpointing enabled (trades compute for memory)")
 
     for epoch in range(args.epochs):
