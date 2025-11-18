@@ -165,8 +165,8 @@ def main():
     # --- Set sensible defaults from config or hardcode them ---
     default_model_path = script_dir / (
             codesearch_config.get('output_dir', 'CodeSearch/graphcodebert-cpp-codesearch') + '/best_model')
-    default_eval_file = script_dir / eval_config.get('eval_data_file', 'data/eval.jsonl')
-    default_distractor_file = script_dir / eval_config.get('distractor_data_file', 'data/distractors.jsonl')
+    default_eval_file = "/home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/data/eval.jsonl"
+    default_distractor_file = "/home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/data/distractors.jsonl"
     default_code_len = codesearch_config.get('code_length', 256)
     default_nl_len = codesearch_config.get('nl_length', 128)
     default_batch_size = codesearch_config.get('eval_batch_size', 32)
