@@ -281,7 +281,7 @@ class UniXcoderEvaluator:
                     top_predictions = self.tokenizer.convert_ids_to_tokens(top_indices)
 
                     correct_token_prob = 1e-9
-                    for rank, (pred, prob) in enumerate(zip(top_predictions, top_probs), 1):
+x                    for rank, (pred, prob) in enumerate(zip(top_predictions, top_probs), 1):
                         if pred == original_token:
                             correct_token_prob = prob.item()
                             if rank <= 1:
