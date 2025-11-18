@@ -30,7 +30,7 @@ torch.manual_seed(42)
 repo_dir = Path(__file__).parent.parent.absolute()
 print("repo dir: ", repo_dir)
 
-GRAPH_PATH ="/home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config/best_model"
+GRAPH_PATH ="/home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/MLM/GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config/best_model"
 UNIX_PATH = "/home/mczap/code_comp/Code_Comprehension/BERTModels/UnixCoderCPP/unixcoder-cpp-mlm/best_model"
 CODE_PATH = 'neulab/codebert-cpp'
 
