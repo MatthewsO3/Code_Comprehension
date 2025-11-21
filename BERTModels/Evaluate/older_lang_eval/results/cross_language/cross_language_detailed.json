@@ -1,0 +1,35 @@
+{
+  "java": {
+    "total_top1": 3972,
+    "total_top5": 4577,
+    "total_top10": 4683,
+    "total_masked": 5102,
+    "failed_samples": 0,
+    "top1_acc": 0.7785182281458252,
+    "top5_acc": 0.8970991767934143,
+    "top10_acc": 0.917875343002744,
+    "perplexity": 8.984860062678045
+  },
+  "python": {
+    "total_top1": 3642,
+    "total_top5": 4250,
+    "total_top10": 4396,
+    "total_masked": 4803,
+    "failed_samples": 0,
+    "top1_acc": 0.7582760774515928,
+    "top5_acc": 0.8848636268998542,
+    "top10_acc": 0.9152612950239434,
+    "perplexity": 10.178883713891837
+  },
+  "javascript": {
+    "total_top1": 3253,
+    "total_top5": 3825,
+    "total_top10": 3959,
+    "total_masked": 4373,
+    "failed_samples": 0,
+    "top1_acc": 0.7438829179053281,
+    "top5_acc": 0.8746855705465355,
+    "top10_acc": 0.9053281500114339,
+    "perplexity": 12.943709391940232
+  }
+}
