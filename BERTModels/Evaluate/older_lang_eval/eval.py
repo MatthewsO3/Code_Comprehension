@@ -437,7 +437,7 @@ def main():
         print(f"{'=' * 80}")
 
         try:
-            snippets = fetch_language_snippets(language, num_samples=100,
+            snippets = fetch_language_snippets(language, num_samples=1000,
                                                tokenizer=tokenizer)
 
             if not snippets:
