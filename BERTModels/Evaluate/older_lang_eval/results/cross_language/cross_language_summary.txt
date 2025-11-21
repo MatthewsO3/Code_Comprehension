@@ -2,7 +2,7 @@
 CROSS-LANGUAGE MLM EVALUATION: C++-Trained GraphCodeBERT
 ================================================================================
 
-Model: /Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/GraphCodeBert/GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config/best_model
+Model: /home/mczap/code_comp/Code_Comprehension/BERTModels/GraphCodeBert/MLM/GraphCodeBert/Models/graphcodebert-cpp-mlm-from-config/best_model
 Mask Ratio: 0.2
 Top-K: 10
 
@@ -13,30 +13,30 @@ RESULTS BY LANGUAGE
 
 JAVA
 --------------------------------------------------------------------------------
-  Total masked tokens: 5102
+  Total masked tokens: 51999
   Failed samples: 0
-  Top-1 Accuracy:  0.7785 (3972/5102)
-  Top-5 Accuracy:  0.8971 (4577/5102)
-  Top-10 Accuracy: 0.9179 (4683/5102)
-  Perplexity:      8.9849
+  Top-1 Accuracy:  0.8466 (44021/51999)
+  Top-5 Accuracy:  0.9255 (48123/51999)
+  Top-10 Accuracy: 0.9415 (48958/51999)
+  Perplexity:      4.7303
 
 PYTHON
 --------------------------------------------------------------------------------
-  Total masked tokens: 4803
+  Total masked tokens: 46967
   Failed samples: 0
-  Top-1 Accuracy:  0.7583 (3642/4803)
-  Top-5 Accuracy:  0.8849 (4250/4803)
-  Top-10 Accuracy: 0.9153 (4396/4803)
-  Perplexity:      10.1789
+  Top-1 Accuracy:  0.8129 (38181/46967)
+  Top-5 Accuracy:  0.9123 (42849/46967)
+  Top-10 Accuracy: 0.9317 (43761/46967)
+  Perplexity:      6.2740
 
 JAVASCRIPT
 --------------------------------------------------------------------------------
-  Total masked tokens: 4373
+  Total masked tokens: 45209
   Failed samples: 0
-  Top-1 Accuracy:  0.7439 (3253/4373)
-  Top-5 Accuracy:  0.8747 (3825/4373)
-  Top-10 Accuracy: 0.9053 (3959/4373)
-  Perplexity:      12.9437
+  Top-1 Accuracy:  0.8163 (36905/45209)
+  Top-5 Accuracy:  0.9126 (41258/45209)
+  Top-10 Accuracy: 0.9327 (42166/45209)
+  Perplexity:      6.1126
 
 ================================================================================
 COMPARISON TABLE
@@ -44,8 +44,8 @@ COMPARISON TABLE
 
 Language        Top-1        Top-5        Top-10       Perplexity  
 --------------------------------------------------------------------------------
-JAVA            0.7785       0.8971       0.9179       8.9849      
-PYTHON          0.7583       0.8849       0.9153       10.1789     
-JAVASCRIPT      0.7439       0.8747       0.9053       12.9437     
+JAVA            0.8466       0.9255       0.9415       4.7303      
+PYTHON          0.8129       0.9123       0.9317       6.2740      
+JAVASCRIPT      0.8163       0.9126       0.9327       6.1126      
 
 ================================================================================
