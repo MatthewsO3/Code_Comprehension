@@ -37,7 +37,7 @@ LANGUAGES = {
 }
 
 # Update this to your UnixCoder model path
-MODEL_PATH = "/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/UnixCoderCPP/unixcoder-cpp-mlm/best_model"
+MODEL_PATH = "/home/mczap/code_comp/Code_Comprehension/BERTModels/UnixCoderCPP/unixcoder-cpp-mlm/best_model"
 RESULTS_DIR = Path('results/cross_language_unixcoder')
 MASK_RATIO = 0.2
 TOP_K = 10

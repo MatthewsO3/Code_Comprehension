@@ -13,30 +13,30 @@ RESULTS BY LANGUAGE
 
 JAVA
 --------------------------------------------------------------------------------
-  Total masked tokens: 30
+  Total masked tokens: 51999
   Failed samples: 0
-  Top-1 Accuracy:  0.9000 (27/30)
-  Top-5 Accuracy:  0.9667 (29/30)
-  Top-10 Accuracy: 0.9667 (29/30)
-  Perplexity:      2.9091
+  Top-1 Accuracy:  0.8492 (44160/51999)
+  Top-5 Accuracy:  0.9201 (47846/51999)
+  Top-10 Accuracy: 0.9359 (48666/51999)
+  Perplexity:      5.4397
 
 PYTHON
 --------------------------------------------------------------------------------
-  Total masked tokens: 89
+  Total masked tokens: 46967
   Failed samples: 0
-  Top-1 Accuracy:  0.8202 (73/89)
-  Top-5 Accuracy:  0.9101 (81/89)
-  Top-10 Accuracy: 0.9101 (81/89)
-  Perplexity:      8.7952
+  Top-1 Accuracy:  0.8011 (37626/46967)
+  Top-5 Accuracy:  0.8960 (42082/46967)
+  Top-10 Accuracy: 0.9158 (43014/46967)
+  Perplexity:      9.1622
 
 JAVASCRIPT
 --------------------------------------------------------------------------------
-  Total masked tokens: 20
+  Total masked tokens: 45209
   Failed samples: 0
-  Top-1 Accuracy:  0.6000 (12/20)
-  Top-5 Accuracy:  0.8500 (17/20)
-  Top-10 Accuracy: 0.8500 (17/20)
-  Perplexity:      42.9129
+  Top-1 Accuracy:  0.8134 (36774/45209)
+  Top-5 Accuracy:  0.9020 (40779/45209)
+  Top-10 Accuracy: 0.9210 (41637/45209)
+  Perplexity:      7.9636
 
 ================================================================================
 COMPARISON TABLE
@@ -44,8 +44,8 @@ COMPARISON TABLE
 
 Language        Top-1        Top-5        Top-10       Perplexity  
 --------------------------------------------------------------------------------
-JAVA            0.9000       0.9667       0.9667       2.9091      
-PYTHON          0.8202       0.9101       0.9101       8.7952      
-JAVASCRIPT      0.6000       0.8500       0.8500       42.9129     
+JAVA            0.8492       0.9201       0.9359       5.4397      
+PYTHON          0.8011       0.8960       0.9158       9.1622      
+JAVASCRIPT      0.8134       0.9020       0.9210       7.9636      
 
 ================================================================================
