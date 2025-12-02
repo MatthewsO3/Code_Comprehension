@@ -150,6 +150,82 @@ def plot_single_model(model_name, languages, output_path=None):
     print(f"✓ Saved {out_file}")
     plt.show()
 
+def plot_model_comparison(all_models_data):
+    """
+    Compare models on each metric (Top-1, Top-5, Top-10, Perplexity)
+    for each language.
+    Produces one chart per (language, metric).
+    """
+
+    metrics = {
+        "top1": "Top-1 Accuracy",
+        "top5": "Top-5 Accuracy",
+        "top10": "Top-10 Accuracy",
+        "perplexity": "Perplexity",
+    }
+
+    # Collect all languages across models
+    all_languages = set()
+    for model, langs in all_models_data.items():
+        all_languages.update(langs.keys())
+    all_languages = sorted(all_languages)
+
+    for lang in all_languages:
+
+        for metric_key, metric_label in metrics.items():
+
+            models = []
+            values = []
+
+            for model_name, lang_data in all_models_data.items():
+                if lang in lang_data:
+                    models.append(model_name)
+                    values.append(lang_data[lang][metric_key])
+                else:
+                    # If missing, add zero so chart stays aligned
+                    models.append(model_name)
+                    values.append(0.0)
+
+            # Create bar plot
+            fig, ax = plt.subplots(figsize=(10, 6))
+            x = np.arange(len(models))
+
+            bars = ax.bar(x, values, edgecolor='black', linewidth=1.5)
+
+            # Add value labels above bars
+            for bar, val in zip(bars, values):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.01,
+                    f"{val:.4f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=10,
+                    fontweight="bold"
+                )
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(models, fontsize=11, fontweight='bold')
+            ax.set_title(f"{lang} — {metric_label}", fontsize=16, fontweight='bold', pad=20)
+
+            # Metrics are percentages except perplexity
+            if metric_key != "perplexity":
+                ax.set_ylim(0, 1.1)
+                ax.set_ylabel("Accuracy", fontsize=12, fontweight='bold')
+                ax.yaxis.set_major_formatter(
+                    plt.FuncFormatter(lambda y, _: f"{y:.0%}")
+                )
+            else:
+                ax.set_ylabel("Perplexity", fontsize=12, fontweight='bold')
+
+            ax.grid(axis="y", alpha=0.3, linestyle="--")
+            ax.set_axisbelow(True)
+            plt.tight_layout()
+
+            out_file = f"compare_{lang.lower()}_{metric_key}.png"
+            plt.savefig(out_file, dpi=300, bbox_inches="tight")
+            print(f"✓ Saved {out_file}")
+            plt.close()
 
 # ============================================================================
 # MAIN USAGE
@@ -163,27 +239,32 @@ if __name__ == "__main__":
         "UniXcoder": "/Users/czapmate/Desktop/szakdoga/GraphCodeBert_CPP/BERTModels/Evaluate/older_lang_eval/results/cross_language_unixcoder/cross_language_summary.txt",
     }
 
+    all_models_data = {}
+
     print("=" * 80)
-    print("CROSS-LANGUAGE MODEL EVALUATION VISUALIZATION")
+    print("CROSS-LANGUAGE MODEL COMPARISON (PER-LANGUAGE, PER-METRIC)")
     print("=" * 80)
 
     for model_name, file_path in result_files.items():
         file_path = Path(file_path)
 
-        if file_path.exists():
-            print(f"\n{'='*80}")
-            print(f"Processing: {model_name}")
-            print(f"{'='*80}")
-
-            parsed_model_name, languages = parse_language_results(file_path)
-
-            if languages:
-                plot_single_model(parsed_model_name, languages, output_path=file_path)
-            else:
-                print(f"⚠ No language data found in {file_path}")
-        else:
+        if not file_path.exists():
             print(f"⚠ File not found: {file_path}")
+            continue
+
+        print(f"\nProcessing {model_name}...")
+
+        parsed_model_name, lang_data = parse_language_results(file_path)
+
+        if lang_data:
+            all_models_data[model_name] = lang_data
+        else:
+            print(f"⚠ No languages found in {model_name}")
+
+    # Now produce cross-model comparison charts
+    if all_models_data:
+        plot_model_comparison(all_models_data)
 
     print("\n" + "=" * 80)
-    print("VISUALIZATION COMPLETE")
+    print("COMPARISON VISUALIZATION COMPLETE")
     print("=" * 80)
