@@ -226,6 +226,13 @@ def plot_model_comparison(all_models_data):
             plt.savefig(out_file, dpi=300, bbox_inches="tight")
             print(f"✓ Saved {out_file}")
             plt.close()
+
+
+model_colors = {
+    "CodeBERT": "green",      # CodeBERT always green
+    "GraphCodeBERT": "lightblue",      # GraphCodeBERT always blue
+    "UniXcoder": "orange"         # UniXcoder always purple
+}
 def plot_models_three_diagrams(all_models_data):
     """
     Produce 4 diagrams:
@@ -247,7 +254,13 @@ def plot_models_three_diagrams(all_models_data):
     fig, ax = plt.subplots(figsize=(14, 6))
     for i, model in enumerate(model_names):
         values = [all_models_data[model].get(lang, {}).get("top1", 0.0) for lang in languages]
-        ax.bar(x + i * width, values, width=width, label=model)
+        ax.bar(
+            x + i * width,
+            values,
+            width=width,
+            label=model,
+            color=model_colors.get(model, "#95E1D3")  # default color if model not in dict
+        )
 
     ax.set_xticks(x + width * (n_models-1)/2)
     ax.set_xticklabels(languages)
@@ -267,7 +280,13 @@ def plot_models_three_diagrams(all_models_data):
     fig, ax = plt.subplots(figsize=(14, 6))
     for i, model in enumerate(model_names):
         values = [all_models_data[model].get(lang, {}).get("top5", 0.0) for lang in languages]
-        ax.bar(x + i * width, values, width=width, label=model)
+        ax.bar(
+            x + i * width,
+            values,
+            width=width,
+            label=model,
+            color=model_colors.get(model, "#95E1D3")  # default color if model not in dict
+        )
 
     ax.set_xticks(x + width * (n_models-1)/2)
     ax.set_xticklabels(languages)
@@ -287,7 +306,13 @@ def plot_models_three_diagrams(all_models_data):
     fig, ax = plt.subplots(figsize=(14, 6))
     for i, model in enumerate(model_names):
         values = [all_models_data[model].get(lang, {}).get("top10", 0.0) for lang in languages]
-        ax.bar(x + i * width, values, width=width, label=model)
+        ax.bar(
+            x + i * width,
+            values,
+            width=width,
+            label=model,
+            color=model_colors.get(model, "#95E1D3")  # default color if model not in dict
+        )
 
     ax.set_xticks(x + width * (n_models-1)/2)
     ax.set_xticklabels(languages)
@@ -307,7 +332,13 @@ def plot_models_three_diagrams(all_models_data):
     fig, ax = plt.subplots(figsize=(14, 6))
     for i, model in enumerate(model_names):
         values = [all_models_data[model].get(lang, {}).get("perplexity", 0.0) for lang in languages]
-        ax.bar(x + i * width, values, width=width, label=model)
+        ax.bar(
+            x + i * width,
+            values,
+            width=width,
+            label=model,
+            color=model_colors.get(model, "#95E1D3")  # default color if model not in dict
+        )
 
     ax.set_xticks(x + width * (n_models-1)/2)
     ax.set_xticklabels(languages)
