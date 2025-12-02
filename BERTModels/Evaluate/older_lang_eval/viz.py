@@ -226,6 +226,99 @@ def plot_model_comparison(all_models_data):
             plt.savefig(out_file, dpi=300, bbox_inches="tight")
             print(f"✓ Saved {out_file}")
             plt.close()
+def plot_models_three_diagrams(all_models_data):
+    """
+    Produce 4 diagrams:
+      1. Top-1 accuracy comparison across languages for all models
+      2. Top-5 accuracy comparison
+      3. Top-10 accuracy comparison
+      4. Perplexity comparison across languages for all models
+    """
+
+    languages = sorted({lang for model in all_models_data.values() for lang in model})
+    model_names = list(all_models_data.keys())
+    n_models = len(model_names)
+    x = np.arange(len(languages))
+    width = 0.22
+
+    # -----------------------------------------------------------
+    # DIAGRAM 1 — TOP-1 ACCURACY
+    # -----------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(14, 6))
+    for i, model in enumerate(model_names):
+        values = [all_models_data[model].get(lang, {}).get("top1", 0.0) for lang in languages]
+        ax.bar(x + i * width, values, width=width, label=model)
+
+    ax.set_xticks(x + width * (n_models-1)/2)
+    ax.set_xticklabels(languages)
+    ax.set_ylabel("Top-1 Accuracy")
+    ax.set_title("Top-1 Accuracy Comparison Across Models")
+    ax.legend()
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.0%}"))
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("comparison_top1.png", dpi=300, bbox_inches="tight")
+    print("✓ Saved comparison_top1.png")
+    plt.close()
+
+    # -----------------------------------------------------------
+    # DIAGRAM 2 — TOP-5 ACCURACY
+    # -----------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(14, 6))
+    for i, model in enumerate(model_names):
+        values = [all_models_data[model].get(lang, {}).get("top5", 0.0) for lang in languages]
+        ax.bar(x + i * width, values, width=width, label=model)
+
+    ax.set_xticks(x + width * (n_models-1)/2)
+    ax.set_xticklabels(languages)
+    ax.set_ylabel("Top-5 Accuracy")
+    ax.set_title("Top-5 Accuracy Comparison Across Models")
+    ax.legend()
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.0%}"))
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("comparison_top5.png", dpi=300, bbox_inches="tight")
+    print("✓ Saved comparison_top5.png")
+    plt.close()
+
+    # -----------------------------------------------------------
+    # DIAGRAM 3 — TOP-10 ACCURACY
+    # -----------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(14, 6))
+    for i, model in enumerate(model_names):
+        values = [all_models_data[model].get(lang, {}).get("top10", 0.0) for lang in languages]
+        ax.bar(x + i * width, values, width=width, label=model)
+
+    ax.set_xticks(x + width * (n_models-1)/2)
+    ax.set_xticklabels(languages)
+    ax.set_ylabel("Top-10 Accuracy")
+    ax.set_title("Top-10 Accuracy Comparison Across Models")
+    ax.legend()
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.0%}"))
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("comparison_top10.png", dpi=300, bbox_inches="tight")
+    print("✓ Saved comparison_top10.png")
+    plt.close()
+
+    # -----------------------------------------------------------
+    # DIAGRAM 4 — PERPLEXITY
+    # -----------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(14, 6))
+    for i, model in enumerate(model_names):
+        values = [all_models_data[model].get(lang, {}).get("perplexity", 0.0) for lang in languages]
+        ax.bar(x + i * width, values, width=width, label=model)
+
+    ax.set_xticks(x + width * (n_models-1)/2)
+    ax.set_xticklabels(languages)
+    ax.set_ylabel("Perplexity")
+    ax.set_title("Perplexity Comparison Across Models")
+    ax.legend()
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("comparison_perplexity.png", dpi=300, bbox_inches="tight")
+    print("✓ Saved comparison_perplexity.png")
+    plt.close()
 
 # ============================================================================
 # MAIN USAGE
@@ -246,24 +339,16 @@ if __name__ == "__main__":
     print("=" * 80)
 
     for model_name, file_path in result_files.items():
-        file_path = Path(file_path)
+        for model_name, file_path in result_files.items():
+            file_path = Path(file_path)
+            if file_path.exists():
+                _, lang_data = parse_language_results(file_path)
+                all_models_data[model_name] = lang_data
+            else:
+                print(f"⚠ File not found: {file_path}")
 
-        if not file_path.exists():
-            print(f"⚠ File not found: {file_path}")
-            continue
-
-        print(f"\nProcessing {model_name}...")
-
-        parsed_model_name, lang_data = parse_language_results(file_path)
-
-        if lang_data:
-            all_models_data[model_name] = lang_data
-        else:
-            print(f"⚠ No languages found in {model_name}")
-
-    # Now produce cross-model comparison charts
-    if all_models_data:
-        plot_model_comparison(all_models_data)
+        if all_models_data:
+            plot_models_three_diagrams(all_models_data)
 
     print("\n" + "=" * 80)
     print("COMPARISON VISUALIZATION COMPLETE")
